@@ -164,6 +164,79 @@
     assertEqual("incrementalFileChanged: metadata missing on either side is unchanged",
       incrementalFileChanged({ t: 1, m: "", s: 0 }, { updatedAt: "2026-07-01T10:00:00Z", size: 100 }), false);
 
+    // --- extractMediaRefs ---
+    (() => {
+      const refs = extractMediaRefs(
+        '<p><iframe src="/media_attachments_iframe/4711?type=video&amp;embedded=true&amp;verifier=abc" data-media-id="m-AAA" title="Lecture 1"></iframe></p>' +
+        '<iframe src="https://canvas.vu.nl/media_objects_iframe/m-BBB?type=video"></iframe>' +
+        '<a href="/media_objects/m-CCC" class="instructure_inline_media_comment video_comment">Watch</a>' +
+        '<video data-media_comment_id="m-DDD" src="https://canvas.vu.nl/courses/1/media_download?entryId=m-DDD&amp;type=mp4"></video>' +
+        '<a href="/courses/1/files/99">a normal file</a>' +
+        '<iframe src="https://www.youtube.com/embed/xyz"></iframe>'
+      );
+      assertEqual("extractMediaRefs: finds four distinct media embeds", refs.length, 4);
+      assertEqual("extractMediaRefs: modern iframe is an attachment ref", refs[0].kind + ":" + refs[0].id, "attachment:4711");
+      assertEqual("extractMediaRefs: carries verifier param", refs[0].params.verifier, "abc");
+      assertEqual("extractMediaRefs: keeps iframe title", refs[0].title, "Lecture 1");
+      assertEqual("extractMediaRefs: older media_objects_iframe is a media ref", refs[1].kind + ":" + refs[1].id, "media:m-BBB");
+      assertEqual("extractMediaRefs: legacy anchor is a media ref", refs[2].id, "m-CCC");
+      assertEqual("extractMediaRefs: legacy video entryId is a media ref", refs[3].id, "m-DDD");
+      assertEqual("extractMediaRefs: same id twice is collapsed",
+        extractMediaRefs('<iframe src="/media_objects_iframe/m-X"></iframe><a href="/media_objects/m-X">x</a>').length, 1);
+      assertEqual("extractMediaRefs: empty input", extractMediaRefs("").length, 0);
+      assertEqual("extractMediaRefs: kaltura-style id", extractMediaRefs('<iframe src="/media_objects_iframe/0_r949z9lk?type=video"></iframe>')[0].id, "0_r949z9lk");
+    })();
+
+    // --- pickMediaSource ---
+    (() => {
+      const best = pickMediaSource([
+        { url: "a", bitrate: "382", content_type: "video/mp4" },
+        { url: "b", bitrate: "1200", content_type: "video/mp4" },
+        { url: "c", bitrate: "9000", content_type: "application/x-mpegURL" },
+      ]);
+      assertEqual("pickMediaSource: highest bitrate mp4 wins over HLS", best.url, "b");
+      assertEqual("pickMediaSource: empty array is null", pickMediaSource([]), null);
+      assertEqual("pickMediaSource: undefined is null", pickMediaSource(undefined), null);
+      assertEqual("pickMediaSource: skips entries without a url", pickMediaSource([{ bitrate: "5" }]), null);
+    })();
+
+    // --- mediaFilename ---
+    assertEqual("mediaFilename: title plus flavor extension",
+      mediaFilename({ title: "Week 3 lecture" }, { fileExt: "mp4" }), "Week 3 lecture.mp4");
+    assertEqual("mediaFilename: does not double the extension",
+      mediaFilename({ title: "studio.mp4" }, { content_type: "video/mp4" }), "studio.mp4");
+    assertEqual("mediaFilename: audio flavor gets m4a",
+      mediaFilename({ user_entered_title: "Feedback" }, { content_type: "audio/mp4" }), "Feedback.m4a");
+    assertEqual("mediaFilename: falls back to stem and mp4",
+      mediaFilename({}, {}, "media_1"), "media_1.mp4");
+
+    // --- convertLocalMediaEmbeds ---
+    assert("convertLocalMediaEmbeds: local mp4 iframe becomes video element",
+      (() => { const o = convertLocalMediaEmbeds('<iframe src="../Media/Lecture 1.mp4" title="Lecture 1"></iframe>');
+               return o.startsWith("<video") && o.includes('src="../Media/Lecture 1.mp4"') && o.includes("controls") && !o.includes("<iframe"); })());
+    assert("convertLocalMediaEmbeds: local m4a becomes audio element",
+      convertLocalMediaEmbeds('<iframe src="Media/x.m4a"></iframe>').startsWith("<audio"));
+    assertEqual("convertLocalMediaEmbeds: remote iframe untouched",
+      convertLocalMediaEmbeds('<iframe src="https://vu.instructuremedia.com/embed/abc"></iframe>'),
+      '<iframe src="https://vu.instructuremedia.com/embed/abc"></iframe>');
+    assertEqual("convertLocalMediaEmbeds: root-relative iframe untouched",
+      convertLocalMediaEmbeds('<iframe src="/media_attachments_iframe/1"></iframe>'),
+      '<iframe src="/media_attachments_iframe/1"></iframe>');
+
+    // --- rewriteCanvasLinks: media ---
+    (() => {
+      const map = new Map([
+        ["https://c.vu.nl/media_attachments_iframe/4711", "Media/Lecture 1.mp4"],
+        ["media:m-DDD", "Media/Old.mp4"],
+      ]);
+      assertEqual("rewriteCanvasLinks: media iframe src rewritten ignoring query",
+        rewriteCanvasLinks('<iframe src="https://c.vu.nl/media_attachments_iframe/4711?type=video"></iframe>', map, "Pages/"),
+        '<iframe src="../Media/Lecture 1.mp4"></iframe>');
+      assertEqual("rewriteCanvasLinks: entryId media_download src rewritten",
+        rewriteCanvasLinks('<video src="https://c.vu.nl/courses/1/media_download?entryId=m-DDD&type=mp4"></video>', map, ""),
+        '<video src="Media/Old.mp4"></video>');
+    })();
+
     // --- darkenColor ---
     assertEqual("darkenColor: returns hex string", typeof darkenColor("#e82429"), "string");
     assert("darkenColor: starts with #", darkenColor("#e82429").startsWith("#"));

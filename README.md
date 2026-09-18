@@ -39,6 +39,7 @@ If you teach, it doubles as an end-of-term archiving tool: it detects your instr
 - Cross-reference rewriting: links between exported pages, assignments, and files become relative paths so you can browse the course offline without dead Canvas links
 - Pulls in pages that only appear inside Modules, plus their embedded slides / PDFs
 - Finds files embedded in assignments, pages, announcements, and discussions that don't appear in the file browser
+- Downloads videos and audio uploaded through the Canvas editor (the built-in media player), with captions, and plays them offline in the exported pages
 - Saves into organized subfolders per course with your original Canvas folder structure preserved
 - Four built-in presets (Full Archive, Files Only, Text Only, Linked Only) plus custom configuration
 - Configurable download throttling, file conflict handling, and folder prefix
@@ -147,6 +148,7 @@ Open settings from the extension popup or your browser's extension options page.
 | Student submissions | *Teacher/TA:* every student's work for each assignment — all attempts, organized as `Submissions/<Assignment>/<Student>/`, with a per-assignment `_grades.csv` and rubric feedback. *Student:* your own submissions and attempt history |
 | Quizzes | Quiz metadata and description for everyone. *Teacher/TA:* the question bank with answer key plus a per-student score table and `_grades.csv`. *Student:* your score and (when the instructor left responses visible) your answered questions |
 | Linked files | Files embedded in page/assignment/announcement/discussion/syllabus HTML that don't appear in the file browser, including inline images and files linked from another course (when Canvas grants access through the linking page). Links that can't be fetched are listed in `_inaccessible_links.csv` |
+| Canvas media | Videos and audio uploaded or recorded through the Canvas editor (the built-in media player, not the Files tab) are saved to `Media/` at their highest quality, with captions as `.srt`. Exported pages play them offline. Media-recording submissions and audio/video feedback comments land in the submission folder. Media still being processed by Canvas is listed in `_inaccessible_links.csv` |
 
 Each export also includes a `manifest.json` with metadata: export date, file counts per type, source URL, and extension version.
 
@@ -238,7 +240,7 @@ For the full privacy policy, see [PRIVACY.md](PRIVACY.md).
 
 ## Known limitations
 
-- Content hosted by third-party LTI tools (Turnitin, Panopto, external videos) lives outside Canvas and can't be downloaded
+- Content hosted by third-party video tools (Canvas Studio, Panopto, Kaltura, YuJa, Echo360, Vimeo, Zoom, Microsoft Stream) lives outside Canvas behind that tool's own login and download permissions, so it can't be downloaded; only media uploaded through Canvas's own editor is fetched. YouTube embeds become clickable thumbnails
 - You must be logged into Canvas. There's no API-token or headless mode
 - Pages, assignments, announcements, and discussions are saved as HTML summaries, not pixel-perfect copies of the Canvas layout
 - Heavily customized Canvas themes may affect button placement or page detection

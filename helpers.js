@@ -156,6 +156,160 @@ function rewriteYouTubeEmbeds(root) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Canvas-native media (Rich Content Editor uploads / recordings)
+// ---------------------------------------------------------------------------
+
+/**
+ * Finds every Canvas-native media embed in a chunk of Canvas HTML.
+ *
+ * Media uploaded or recorded through the Rich Content Editor is *not* a
+ * course file: it is a MediaObject served through the media player, so it
+ * never shows up as a `/files/<id>` link. Canvas has embedded it three ways
+ * over the years, and old course copies carry all of them:
+ *
+ *   <iframe src="/media_attachments_iframe/123?type=video" data-media-id="m-x">   (2023+)
+ *   <iframe src="https://host/media_objects_iframe/m-x?type=video">              (older RCE)
+ *   <a href="/media_objects/m-x" class="instructure_inline_media_comment">        (legacy)
+ *   <video data-media_comment_id="m-x" src=".../media_download?entryId=m-x">     (legacy, API-rewritten)
+ *
+ * Returns [{ kind: "attachment"|"media", id, ref, params: {verifier, location},
+ * title }]. `kind` picks the info endpoint (`/media_attachments/:id/info` vs
+ * `/media_objects/:media_id/info`). Duplicate ids within one chunk are
+ * collapsed; the same video reachable both by attachment id and media id is
+ * deduplicated later by the resolver on the `media_id` the info call returns.
+ */
+function extractMediaRefs(html) {
+  if (!html) return [];
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  const out = [];
+  const seen = new Set();
+  const MEDIA_ID = "(m-[A-Za-z0-9_-]+|\\d+_[A-Za-z0-9]+)";
+  const reAttachment = new RegExp("/media_attachments(?:_iframe)?/(\\d+)(?:[/?#]|$)");
+  const reMediaObject = new RegExp(`/media_objects(?:_iframe)?/${MEDIA_ID}(?:[/?#]|$)`);
+  const reEntryId = new RegExp(`[?&]entryId=${MEDIA_ID}(?:[&#]|$)`);
+
+  const push = (kind, id, ref, title) => {
+    const key = `${kind}:${id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const params = {};
+    try {
+      const parsed = new URL(ref, "https://canvas.invalid/");
+      for (const k of ["verifier", "location"]) {
+        const v = parsed.searchParams.get(k);
+        if (v) params[k] = v;
+      }
+    } catch {
+      // Malformed ref — no params.
+    }
+    out.push({ kind, id, ref, params, title: (title || "").trim() });
+  };
+
+  const candidates = tpl.content.querySelectorAll(
+    "iframe[src], video[src], audio[src], source[src], a[href], [data-media-id], [data-media_comment_id]"
+  );
+  for (const el of candidates) {
+    const ref = el.getAttribute("src") || el.getAttribute("href") || "";
+    const title = el.getAttribute("title") || el.getAttribute("data-title") || el.textContent || "";
+    let m;
+    if ((m = ref.match(reAttachment))) {
+      push("attachment", m[1], ref, title);
+    } else if ((m = ref.match(reMediaObject))) {
+      push("media", m[1], ref, title);
+    } else if ((m = ref.match(reEntryId))) {
+      push("media", m[1], ref, title);
+    } else {
+      // Bare data attributes with no recognisable URL (e.g. a <span> the RCE
+      // left behind, or an iframe pointing at a plain player page).
+      const dataId = el.getAttribute("data-media-id") || el.getAttribute("data-media_comment_id");
+      if (dataId && new RegExp(`^${MEDIA_ID}$`).test(dataId)) push("media", dataId, ref, title);
+    }
+  }
+  return out;
+}
+
+/**
+ * Picks the source to download from a MediaObject's `media_sources` array:
+ * the highest-bitrate mp4/webm (or audio) flavor, preferring the original
+ * upload only as a tie-break. Returns null when there is nothing usable
+ * (media still transcoding, or a restricted entry Canvas returns empty).
+ */
+function pickMediaSource(sources) {
+  if (!Array.isArray(sources) || sources.length === 0) return null;
+  const usable = sources.filter((s) => s && (s.url || s.src));
+  if (usable.length === 0) return null;
+  const score = (s) => {
+    const type = String(s.content_type || "").toLowerCase();
+    let n = parseInt(s.bitrate, 10) || 0;
+    // HLS/DASH manifests can't be saved as a single file; push them last.
+    if (/mpegurl|dash|m3u8/.test(type) || /\.(m3u8|mpd)(\?|$)/.test(s.url || s.src || "")) n -= 1e9;
+    if (s.isOriginal === true || s.isOriginal === "1") n += 1;
+    return n;
+  };
+  return usable.slice().sort((a, b) => score(b) - score(a))[0];
+}
+
+/**
+ * Builds a filename for a resolved media object: the user-facing title plus
+ * the flavor's extension (falling back to the MIME subtype, then mp4/m4a).
+ */
+function mediaFilename(info, source, fallbackStem = "media") {
+  const rawTitle = info?.user_entered_title || info?.title || fallbackStem;
+  let stem = sanitizeFilename(rawTitle).substring(0, 120) || fallbackStem;
+  let ext = String(source?.fileExt || "").replace(/^\./, "").toLowerCase();
+  if (!ext) {
+    const type = String(source?.content_type || "").toLowerCase();
+    const sub = type.split("/")[1] || "";
+    if (sub === "mp4" && type.startsWith("audio/")) ext = "m4a";
+    else if (/^(mp4|webm|ogg|mp3|m4a|mov|flv|wav|aac|m4v)$/.test(sub)) ext = sub;
+    else if (type.startsWith("audio/")) ext = "m4a";
+    else ext = "mp4";
+  }
+  const stemExt = stem.match(/\.([a-z0-9]{2,4})$/i)?.[1]?.toLowerCase();
+  if (stemExt && /^(mp4|webm|ogg|mp3|m4a|mov|flv|wav|aac|m4v|avi|mkv|wmv)$/.test(stemExt)) {
+    stem = stem.slice(0, -(stemExt.length + 1));
+  }
+  return `${stem}.${ext}`;
+}
+
+/**
+ * After link rewriting, Canvas media iframes point at a *local* mp4 (a
+ * relative path). An iframe on a video file only shows the browser's default
+ * player inside a scrollable box, and Markdown export drops iframes entirely,
+ * so swap them for a real <video>/<audio> element with controls. Iframes
+ * whose src is still remote (Studio, Panopto, YouTube leftovers) are untouched.
+ */
+function convertLocalMediaEmbeds(html) {
+  if (!html || !/<iframe/i.test(html)) return html;
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html;
+  const AUDIO = /\.(mp3|m4a|wav|aac|ogg|oga)$/i;
+  const VIDEO = /\.(mp4|webm|m4v|mov|ogv)$/i;
+  for (const iframe of [...tpl.content.querySelectorAll("iframe[src]")]) {
+    const src = iframe.getAttribute("src") || "";
+    const isLocal = !/^[a-z][a-z0-9+.-]*:/i.test(src) && !src.startsWith("/") && !src.startsWith("//");
+    if (!isLocal) continue;
+    const path = src.split("?")[0].split("#")[0];
+    const isAudio = AUDIO.test(path);
+    if (!isAudio && !VIDEO.test(path)) continue;
+    const el = document.createElement(isAudio ? "audio" : "video");
+    el.setAttribute("controls", "");
+    el.setAttribute("preload", "metadata");
+    el.setAttribute("src", src);
+    if (!isAudio) el.setAttribute("style", "max-width:100%;height:auto;");
+    const title = iframe.getAttribute("title");
+    if (title) el.setAttribute("title", title);
+    const link = document.createElement("a");
+    link.setAttribute("href", src);
+    link.textContent = title || (isAudio ? "Download audio" : "Download video");
+    el.appendChild(link);
+    iframe.replaceWith(el);
+  }
+  return tpl.innerHTML;
+}
+
 /**
  * Canvas sometimes leaves literal import placeholders like
  * `$CANVAS_OBJECT_REFERENCE$` in copied/imported content. They point nowhere and
@@ -284,6 +438,12 @@ function rewriteCanvasLinks(html, urlMap, fromPath) {
         const fileMatch = normalized.match(/^(.*\/files\/\d+)(?:\/.*)?$/);
         if (fileMatch) target = urlMap.get(fileMatch[1]);
       }
+      // Legacy media comments load through `media_download?entryId=m-x`; the
+      // media id is the only stable key, so the map stores it as "media:m-x".
+      if (!target) {
+        const entry = url.match(/[?&]entryId=([^&#]+)/);
+        if (entry) target = urlMap.get(`media:${decodeURIComponent(entry[1])}`);
+      }
     }
     if (!target) return match;
     return `${attr}="${relativeUrlFromTo(fromPath, target)}"`;
@@ -308,6 +468,20 @@ function htmlToMarkdown(html) {
     if (typeof turndownPluginGfm !== "undefined") {
       _turndownService.use(turndownPluginGfm.gfm);
     }
+    // Turndown's default for unknown elements is "replace with children",
+    // which deletes <iframe>/<video>/<audio> outright — the Markdown export
+    // lost even the *link* to every embedded video. Emit a link instead: a
+    // local one for media we downloaded, the original URL for remote embeds.
+    _turndownService.addRule("mediaEmbed", {
+      filter: (node) =>
+        ["IFRAME", "VIDEO", "AUDIO"].includes(node.nodeName) && !!node.getAttribute("src"),
+      replacement: (content, node) => {
+        const src = node.getAttribute("src");
+        const kind = node.nodeName === "IFRAME" ? "Embedded content" : node.nodeName === "VIDEO" ? "Video" : "Audio";
+        const label = (node.getAttribute("title") || "").trim() || kind;
+        return `\n\n[${label}](${src})\n\n`;
+      },
+    });
   }
   return _turndownService.turndown(sanitizeHtml(html));
 }

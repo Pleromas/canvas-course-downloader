@@ -235,6 +235,7 @@ async function downloadAsZip(files, courseName, settings, log) {
   let completed = 0;
   let failed = 0;
   const failedFiles = [];
+  const failedKeys = []; // path+filename, for the incremental inventory
 
   createDownloadPanel();
 
@@ -283,6 +284,7 @@ async function downloadAsZip(files, courseName, settings, log) {
         console.warn(`[Canvas Downloader] ZIP: failed to fetch ${file.filename}:`, err);
         failed++;
         failedFiles.push(file.filename);
+        failedKeys.push(fullPath);
       }
     }
   }
@@ -306,7 +308,7 @@ async function downloadAsZip(files, courseName, settings, log) {
         total: totalFiles, completed, failed, queued: 0, downloading: 0,
         currentFile: null, failedFiles, done: true, cancelled: true,
       });
-      return;
+      return { cancelled: true, failedKeys };
     }
     console.error("[Canvas Downloader] ZIP generation failed:", err);
     log(`ZIP generation failed: ${err && err.message ? err.message : err}.`);
@@ -325,7 +327,7 @@ async function downloadAsZip(files, courseName, settings, log) {
       total: totalFiles, completed, failed, queued: 0, downloading: 0,
       currentFile: null, failedFiles, done: true, cancelled: true,
     });
-    return;
+    return { cancelled: true, failedKeys };
   }
 
   const url = URL.createObjectURL(blob);
@@ -350,6 +352,7 @@ async function downloadAsZip(files, courseName, settings, log) {
   });
 
   log(`ZIP created: ${safeName}.zip (${completed} files, ${failed} failed)`);
+  return { cancelled: false, completed, failed, failedKeys };
 }
 
 // ---------------------------------------------------------------------------
@@ -465,6 +468,24 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
     });
   }
 
+  // Files and media that exist but can't be fetched (no access, deleted,
+  // locked, still transcoding) are collected here and reported at the end of
+  // the export instead of being dropped silently — an archive missing 20
+  // lecture PDFs or the week's lecture recording should say so.
+  const inaccessibleLinks = [];
+  const inaccessibleFileIds = new Set();
+  function noteInaccessible(source, text, url, status, sourceCourseId) {
+    inaccessibleLinks.push({ source, text: (text || "").trim(), url, status, sourceCourseId });
+  }
+  function recordInaccessible(link, ref, source, status, sourceCourseId) {
+    const id = ref.match(/\/files\/(\d+)/)?.[1];
+    if (id) {
+      if (inaccessibleFileIds.has(id)) return;
+      inaccessibleFileIds.add(id);
+    }
+    noteInaccessible(source, link.textContent, ref, status, sourceCourseId);
+  }
+
   // --- Files & Folders -------------------------------------------------------
   let files = [];
   if (types.files) {
@@ -481,35 +502,34 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       if (folder && !folder.endsWith("/")) folder += "/";
       if (folder.startsWith("/")) folder = folder.slice(1);
 
+      // A file locked for the user is listed but comes back with an empty
+      // `url`. Queueing it would fetch("") — the current Canvas page — and
+      // store that HTML under the file's name (a 40-byte "lecture.mp4").
+      // Report it instead, same as the linked-file path does.
+      if (!file.url) {
+        inaccessibleFileIds.add(String(file.id));
+        noteInaccessible("Files", file.display_name, `${domain}/courses/${courseId}/files/${file.id}`, file.locked_for_user ? "locked" : "no-url");
+        return;
+      }
+
       seenFileIds.add(String(file.id));
       filesToDownload.push({ url: file.url, filename: file.display_name, path: `Files/${folder}`, size: file.size || 0, contentType: file["content-type"] || "", updatedAt: file.updated_at || file.modified_at || "", canvasId: String(file.id) });
     });
   }
 
   // --- Hidden file extraction ------------------------------------------------
-  // Scans both anchors (a[href]) and embedded media (img/iframe/source[src]) for
-  // /files/<id> references. Canvas embeds inline images as <img src=".../files/
-  // <id>/preview">, which are otherwise neither downloaded nor link-rewritten —
-  // so without this they render as broken images in the offline archive.
-  //
-  // Links that can't be fetched (no access, deleted, locked) are collected in
-  // `inaccessibleLinks` and reported at the end of the export instead of being
-  // dropped silently — an archive missing 20 lecture PDFs should say so.
-  const inaccessibleLinks = [];
-  const inaccessibleFileIds = new Set();
-  function recordInaccessible(link, ref, source, status, sourceCourseId) {
-    const id = ref.match(/\/files\/(\d+)/)?.[1];
-    if (id) {
-      if (inaccessibleFileIds.has(id)) return;
-      inaccessibleFileIds.add(id);
-    }
-    inaccessibleLinks.push({ source, text: (link.textContent || "").trim(), url: ref, status, sourceCourseId });
-  }
+  // Scans both anchors (a[href]) and embedded media (img/iframe/video/audio/
+  // source[src]) for /files/<id> references. Canvas embeds inline images as
+  // <img src=".../files/<id>/preview">, which are otherwise neither downloaded
+  // nor link-rewritten — so without this they render as broken images in the
+  // offline archive. Canvas-native media players (videos uploaded through the
+  // editor, which are MediaObjects rather than files) are handled by
+  // `extractMediaEmbeds` below, which this function calls last.
 
   async function extractLinkedFiles(html, source) {
     const doc = new DOMParser().parseFromString(html, "text/html");
     const links = doc.querySelectorAll(
-      'a[href*="/files/"], img[src*="/files/"], iframe[src*="/files/"], source[src*="/files/"]'
+      'a[href*="/files/"], img[src*="/files/"], iframe[src*="/files/"], source[src*="/files/"], video[src*="/files/"], audio[src*="/files/"], embed[src*="/files/"]'
     );
 
     for (const link of links) {
@@ -579,6 +599,154 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
         recordInaccessible(link, ref, source, "error", sourceCourseId);
       }
     }
+
+    await extractMediaEmbeds(html, source);
+  }
+
+  // --- Canvas-native media (Rich Content Editor uploads/recordings) ---------
+  // Videos and audio recorded or uploaded through the editor are MediaObjects
+  // served through Canvas's media player, not course files, so they never
+  // carry a /files/<id> URL and the extractor above can't see them. This was
+  // the "does not download some videos" gap: the lecture recording embedded in
+  // a page was skipped without even a mention in _inaccessible_links.csv.
+  //
+  // Resolution follows what Canvas's own player does: GET
+  // /media_attachments/<id>/info (or /media_objects/<media_id>/info) with the
+  // session cookie, then pick the highest-bitrate flavor from `media_sources`.
+  // On current hosted Canvas those source URLs are same-origin
+  // /media_attachments/<id>/redirect?bitrate=N links that 302 to the signed
+  // CDN file; older instances return the pre-signed CDN URL directly. Either
+  // way a plain fetch with redirects followed yields the mp4. Captions come
+  // from the media_tracks API and are saved beside the video.
+  const mediaEntryByMediaId = new Map(); // media_id -> filesToDownload entry
+  const mediaEntryByRefKey = new Map();  // "attachment:123" / "media:m-x" -> entry (or null if unresolvable)
+
+  /**
+   * Resolves one media reference and queues its best flavor for download.
+   * `ref` is an entry from extractMediaRefs (or a synthetic one built from a
+   * submission's media_comment). Returns the queued entry (or the existing
+   * one when the same media was already queued from elsewhere), else null.
+   */
+  async function resolveMediaObject(ref, source, path, filenamePrefix = "") {
+    const key = `${ref.kind}:${ref.id}`;
+    if (mediaEntryByRefKey.has(key)) return mediaEntryByRefKey.get(key);
+    const entry = await resolveMediaObjectUncached(ref, key, source, path, filenamePrefix);
+    mediaEntryByRefKey.set(key, entry);
+    return entry;
+  }
+
+  async function resolveMediaObjectUncached(ref, key, source, path, filenamePrefix) {
+    const infoPath = ref.kind === "attachment"
+      ? `/media_attachments/${ref.id}/info`
+      : `/media_objects/${encodeURIComponent(ref.id)}/info`;
+    // Same access-granting params as linked files: a verifier/location on the
+    // embed authorises media the user can watch but can't otherwise list.
+    const query = new URLSearchParams(ref.params || {}).toString();
+    const infoUrl = `${domain}${infoPath}${query ? `?${query}` : ""}`;
+    const label = ref.title || `media ${ref.id}`;
+
+    let info;
+    try {
+      const res = await fetchWithRetry(infoUrl);
+      if (!res.ok) {
+        noteInaccessible(source, label, ref.ref || infoUrl, String(res.status));
+        return null;
+      }
+      info = await res.json();
+    } catch (err) {
+      console.error(`[Canvas Downloader] Error resolving media ${key} from ${source}:`, err);
+      noteInaccessible(source, label, ref.ref || infoUrl, "error");
+      return null;
+    }
+
+    const mediaId = info.media_id || (ref.kind === "media" ? ref.id : "");
+    const attachmentId = ref.kind === "attachment" ? ref.id : String(info.attachment_id || "");
+    const mapKeys = [];
+    if (attachmentId) {
+      mapKeys.push(`${domain}/media_attachments_iframe/${attachmentId}`, `/media_attachments_iframe/${attachmentId}`,
+        `${domain}/media_attachments/${attachmentId}`, `/media_attachments/${attachmentId}`);
+    }
+    if (mediaId) {
+      mapKeys.push(`${domain}/media_objects_iframe/${mediaId}`, `/media_objects_iframe/${mediaId}`,
+        `${domain}/media_objects/${mediaId}`, `/media_objects/${mediaId}`, `media:${mediaId}`);
+    }
+
+    // Same video reached through a second embed form (attachment id here,
+    // media id elsewhere): reuse the queued copy, just teach the URL map the
+    // extra spellings so this embed rewrites to it too.
+    const existing = mediaId && mediaEntryByMediaId.get(mediaId);
+    if (existing) {
+      for (const k of mapKeys) if (!existing.mediaKeys.includes(k)) existing.mediaKeys.push(k);
+      return existing;
+    }
+
+    const src = pickMediaSource(info.media_sources);
+    if (!src) {
+      // Empty media_sources means Canvas is still transcoding the upload, or
+      // the media server refused to list flavors for this user.
+      noteInaccessible(source, info.title || label, ref.ref || infoUrl, "no-media-sources");
+      return null;
+    }
+
+    let url;
+    try {
+      url = new URL(src.url || src.src, domain).href;
+    } catch {
+      noteInaccessible(source, info.title || label, ref.ref || infoUrl, "bad-media-url");
+      return null;
+    }
+
+    const filename = `${filenamePrefix}${mediaFilename(info, src, ref.title || `media_${ref.id}`)}`;
+    const entry = {
+      url,
+      filename,
+      path,
+      // Kaltura reports flavor size in kilobytes on some instances and bytes
+      // on others; an unreliable size is worse than none for the ZIP estimate
+      // and the incremental-change check, so leave it unknown.
+      size: 0,
+      contentType: src.content_type || (info.media_type === "audio" ? "audio/mp4" : "video/mp4"),
+      updatedAt: "",
+      mediaId: mediaId || undefined,
+      mediaKeys: mapKeys,
+    };
+    filesToDownload.push(entry);
+    if (mediaId) mediaEntryByMediaId.set(mediaId, entry);
+
+    // Captions: one .srt per track, saved next to the video. The info payload
+    // lists the tracks; their text comes from the media_tracks API.
+    const tracks = Array.isArray(info.media_tracks) ? info.media_tracks : [];
+    if (tracks.length && mediaId) {
+      try {
+        const tracksUrl = attachmentId
+          ? `${domain}/api/v1/media_attachments/${attachmentId}/media_tracks?include[]=content`
+          : `${domain}/api/v1/media_objects/${encodeURIComponent(mediaId)}/media_tracks?include[]=content`;
+        const res = await fetchWithRetry(tracksUrl);
+        if (res.ok) {
+          const list = await res.json();
+          const stem = filename.replace(/\.[a-z0-9]+$/i, "");
+          for (const t of Array.isArray(list) ? list : []) {
+            if (!t.content) continue;
+            const tag = [t.locale, t.kind && t.kind !== "subtitles" ? t.kind : ""].filter(Boolean).join(".");
+            filesToDownload.push({
+              url: `data:text/plain;charset=utf-8,${encodeURIComponent(t.content)}`,
+              filename: `${stem}${tag ? `.${tag}` : ""}.srt`,
+              path,
+            });
+          }
+        }
+      } catch (err) {
+        console.warn(`[Canvas Downloader] Could not fetch captions for ${filename}:`, err);
+      }
+    }
+
+    return entry;
+  }
+
+  async function extractMediaEmbeds(html, source) {
+    for (const ref of extractMediaRefs(html)) {
+      await resolveMediaObject(ref, source, "Media/");
+    }
   }
 
   // --- Pages: collect slugs from the Pages API list -------------------------
@@ -640,13 +808,19 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
   const renderSubmission = async (a, s, folder, studentName, section) => {
     const history = s.submission_history && s.submission_history.length ? s.submission_history : [s];
     const attempts = history.filter(
-      (h) => h.submitted_at || (h.attachments && h.attachments.length) || h.body || h.url
+      (h) => h.submitted_at || (h.attachments && h.attachments.length) || h.body || h.url || h.media_comment
     );
     if (attempts.length === 0) return false;
     const multi = attempts.length > 1;
     const attemptLabel = (h) => (multi ? `Attempt ${h.attempt || "?"} - ` : "");
+    const mediaRef = (mc) => mc && mc.media_id
+      ? { kind: "media", id: String(mc.media_id), ref: mc.url || "", params: {}, title: mc.display_name || "" }
+      : null;
 
     for (const h of attempts) {
+      // A "media recording" submission is a MediaObject, not an attachment.
+      const mref = mediaRef(h.media_comment);
+      if (mref) await resolveMediaObject(mref, `Submission: ${a.name} — ${studentName}`, folder, attemptLabel(h));
       for (const att of h.attachments || []) {
         const fileId = String(att.id || "");
         if (att.url && fileId && !seenFileIds.has(fileId)) {
@@ -680,6 +854,12 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       if (h.url) body += `<p><strong>Submitted URL:</strong> <a href="${escapeHtml(h.url)}">${escapeHtml(h.url)}</a></p>`;
       const names = (h.attachments || []).map((att) => att.display_name || att.filename).filter(Boolean);
       if (names.length) body += `<p><strong>Files:</strong> ${names.map((n) => escapeHtml(attemptLabel(h) + n)).join(", ")}</p>`;
+      if (h.media_comment) {
+        const mc = h.media_comment;
+        const queued = mc.media_id && mediaEntryByMediaId.get(String(mc.media_id));
+        const name = queued ? queued.filename : (mc.display_name || `media ${mc.media_id || ""}`);
+        body += `<p><strong>Media submission:</strong> ${queued ? `<a href="${escapeHtml(name)}">${escapeHtml(name)}</a>` : escapeHtml(name)}${queued ? "" : " <em>(could not be downloaded)</em>"}</p>`;
+      }
     }
     body += renderRubricAssessment(a.rubric, s.rubric_assessment);
     const comments = s.submission_comments || [];
@@ -687,7 +867,17 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       body += "<h3>Comments</h3><ul>";
       for (const c of comments) {
         const at = c.attempt ? ` · attempt ${c.attempt}` : "";
-        body += `<li><strong>${escapeHtml(c.author_name || "Unknown")}</strong>${c.created_at ? ` · ${formatDate(c.created_at)}` : ""}${at}: ${cleanCanvasHtml(c.comment || "")}</li>`;
+        let text = cleanCanvasHtml(c.comment || "");
+        // Audio/video feedback left by the instructor is a media comment with
+        // no text body; download it into the student's folder and link it.
+        const mref = mediaRef(c.media_comment);
+        if (mref) {
+          const author = sanitizeFilename(c.author_name || "comment").substring(0, 40);
+          const queued = await resolveMediaObject(mref, `Submission comment: ${a.name} — ${studentName}`, folder, `Comment - ${author} - `);
+          const name = queued ? queued.filename : (c.media_comment.display_name || "media comment");
+          text += `${text ? " " : ""}${queued ? `<a href="${escapeHtml(name)}">${escapeHtml(name)}</a>` : `<em>${escapeHtml(name)} (could not be downloaded)</em>`}`;
+        }
+        body += `<li><strong>${escapeHtml(c.author_name || "Unknown")}</strong>${c.created_at ? ` · ${formatDate(c.created_at)}` : ""}${at}: ${text}</li>`;
       }
       body += "</ul>";
     }
@@ -1339,7 +1529,13 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       };
     }
   }
-  chrome.storage.local.set({ [incrementalKey]: incrementalRecord });
+  // Written once we know what actually reached the archive (see the ZIP
+  // handoff below): a video whose fetch failed must not be recorded as done,
+  // or every later incremental run would skip it forever.
+  const saveIncrementalRecord = (failedKeys = []) => {
+    for (const k of failedKeys) delete incrementalRecord[k];
+    chrome.storage.local.set({ [incrementalKey]: incrementalRecord });
+  };
 
   // --- Inaccessible linked files report -------------------------------------
   // Surface every linked file we found but couldn't fetch, with the reason.
@@ -1461,6 +1657,10 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       // Linked files pulled from another course are referenced by that
       // course's URL in the exported HTML.
       if (f.sourceCourseId) urlMap.set(`${domain}/courses/${f.sourceCourseId}/files/${f.canvasId}`, target);
+    } else if (f.mediaKeys) {
+      // Canvas media embeds: every spelling of the player URL (attachment
+      // iframe, media-object iframe, legacy anchor, entryId) → the local mp4.
+      for (const k of f.mediaKeys) urlMap.set(k, target);
     }
   }
   // Dereference /modules/items/<id> URLs through the items→resource map.
@@ -1478,7 +1678,9 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
   // --- Rewrite + encode pass on generated docs ---------------------------
   for (const f of filesToDownload) {
     if (f.rawBody === undefined) continue;
-    const rewritten = rewriteCanvasLinks(f.rawBody, urlMap, f.path);
+    // Media iframes whose src now points at a downloaded mp4 become real
+    // <video>/<audio> players (an iframe on a video file is just a scrollbox).
+    const rewritten = convertLocalMediaEmbeds(rewriteCanvasLinks(f.rawBody, urlMap, f.path));
     f.url = isMarkdown
       ? toMarkdownDataUri(f.title, htmlToMarkdown(rewritten))
       : toHtmlDataUri(f.title, rewritten, f.path);
@@ -1498,9 +1700,27 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       log(`Estimated archive size ~${gb} GB exceeds the bundling ceiling — falling back to individual file downloads.`);
       showToast(`Course is too large for ZIP bundling (~${gb} GB). Files will download individually.`, "info");
     } else {
-      return await downloadAsZip(filesToDownload, courseName, settings, log);
+      let result = null;
+      try {
+        result = await downloadAsZip(filesToDownload, courseName, settings, log);
+      } catch (err) {
+        // The estimate only counts files whose size Canvas reported, so a
+        // course with a few unsized lecture recordings can slip under the
+        // ceiling and still blow the in-memory archive. Nothing was saved
+        // yet, so hand the same list to the per-file downloader instead.
+        log(`ZIP bundling failed (${err && err.message ? err.message : err}) — falling back to individual file downloads.`);
+        showToast("ZIP bundling failed for this course. Files will download individually instead.", "info");
+      }
+      if (result) {
+        if (!result.cancelled) saveIncrementalRecord(result.failedKeys);
+        return result;
+      }
     }
   }
+
+  // Individual downloads stream to disk through chrome.downloads, which
+  // reports failures per job in the panel; record the inventory up front.
+  saveIncrementalRecord();
 
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(
