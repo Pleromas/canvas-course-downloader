@@ -255,6 +255,9 @@ async function downloadAsZip(files, courseName, settings, log) {
     const now = new Date();
     for (const file of files) {
       if (abortController.signal.aborted) return;
+      if (file.filename === "manifest.json" && file.path === "" && typeof file.finalize === "function") {
+        file.finalize(failedKeys);
+      }
 
       const fullPath = `${file.path}${file.filename}`;
       updateDownloadPanel({
@@ -515,7 +518,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       }
 
       seenFileIds.add(String(file.id));
-      filesToDownload.push({ url: file.url, filename: file.display_name, path: `Files/${folder}`, size: file.size || 0, contentType: file["content-type"] || "", updatedAt: file.updated_at || file.modified_at || "", canvasId: String(file.id) });
+      filesToDownload.push({ url: file.url, filename: file.display_name, path: `Files/${folder}`, size: file.size || 0, contentType: file["content-type"] || "", updatedAt: file.updated_at || file.modified_at || "", canvasId: String(file.id), meta: { folder, source: "Files" } });
     });
   }
 
@@ -593,6 +596,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
             contentType: data["content-type"] || "",
             updatedAt: data.updated_at || data.modified_at || "",
             canvasId: fileId,
+            meta: { folder: "", source },
             ...(sourceCourseId ? { sourceCourseId } : {}),
           });
         }
@@ -711,6 +715,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       updatedAt: "",
       mediaId: mediaId || undefined,
       mediaKeys: mapKeys,
+      meta: { source, media_type: info.media_type || null },
     };
     filesToDownload.push(entry);
     if (mediaId) mediaEntryByMediaId.set(mediaId, entry);
@@ -794,7 +799,14 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       }
       body += renderRubricDefinition(a.rubric);
       const safeName = sanitizeFilename(a.name).substring(0, 100);
-      filesToDownload.push(buildDocEntry(a.name, body, safeName, "Assignments/", "assignment", String(a.id)));
+      filesToDownload.push(Object.assign(
+        buildDocEntry(a.name, body, safeName, "Assignments/", "assignment", String(a.id)),
+        { updatedAt: a.updated_at || null, meta: {
+          due_at: a.due_at || null, lock_at: a.lock_at || null, unlock_at: a.unlock_at || null,
+          points_possible: a.points_possible ?? null, submission_types: a.submission_types || [],
+          published: a.published ?? null,
+        } }
+      ));
     }
   }
 
@@ -845,6 +857,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
             contentType: att["content-type"] || "",
             updatedAt: att.updated_at || att.modified_at || "",
             canvasId: fileId,
+            meta: { folder: "", source: "Submission" },
           });
         }
       }
@@ -893,7 +906,14 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       body += "</ul>";
     }
     const stem = sanitizeFilename(studentName).substring(0, 80) || "submission";
-    filesToDownload.push(buildDocEntry(`${a.name} — ${studentName}`, body, stem, folder, "submission", null));
+    filesToDownload.push(Object.assign(
+      buildDocEntry(`${a.name} — ${studentName}`, body, stem, folder, "submission", String(a.id)),
+      { updatedAt: s.graded_at || s.submitted_at || null, meta: {
+        score: s.score ?? null, grade: s.grade ?? null, graded_at: s.graded_at || null,
+        submitted_at: s.submitted_at || null, attempt: s.attempt ?? null,
+        comment_count: (s.submission_comments || []).length,
+      } }
+    ));
     return true;
   };
 
@@ -979,7 +999,10 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
         if (types.linkedFiles) await extractLinkedFiles(a.message, `Announcement: ${a.title}`);
       }
       const safeName = sanitizeFilename(a.title).substring(0, 100);
-      filesToDownload.push(buildDocEntry(a.title, body, safeName, "Announcements/", "announcement", String(a.id)));
+      filesToDownload.push(Object.assign(
+        buildDocEntry(a.title, body, safeName, "Announcements/", "announcement", String(a.id)),
+        { updatedAt: a.posted_at || null, meta: { posted_at: a.posted_at || null } }
+      ));
     }
   }
 
@@ -1016,6 +1039,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
               contentType: att["content-type"] || "",
               updatedAt: att.updated_at || att.modified_at || "",
               canvasId: fileId,
+              meta: { folder: "", source: `Discussion: ${topicTitle}` },
             });
           }
         }
@@ -1094,7 +1118,11 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       const safeName = sanitizeFilename(d.title).substring(0, 100);
       filesToDownload.push(Object.assign(
         buildDocEntry(d.title, body, safeName, "Discussions/", "discussion", String(d.id)),
-        d.assignment_id ? { assignmentId: String(d.assignment_id) } : {}
+        d.assignment_id ? { assignmentId: String(d.assignment_id) } : {},
+        { updatedAt: d.last_reply_at || d.posted_at || null, meta: {
+          posted_at: d.posted_at || null,
+          assignment_id: d.assignment_id != null ? String(d.assignment_id) : null,
+        } }
       ));
     }
   }
@@ -1109,6 +1137,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
     for (const mod of modules) {
       modulesBody += `<h2>${mod.name}</h2><ul>`;
       const items = await fetchAllPages(api(`modules/${mod.id}/items?per_page=100`));
+      mod.items = items; // kept for the schema-2 manifest (module order and membership)
 
       for (const item of items) {
         const label = item.html_url ? `<a href="${item.html_url}">${item.title}</a>` : item.title;
@@ -1161,6 +1190,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
                 contentType: data["content-type"] || "",
                 updatedAt: data.updated_at || data.modified_at || "",
                 canvasId: fileId,
+                meta: { folder: safeModName, source: `Module: ${mod.name}` },
               });
             }
           } catch (err) {
@@ -1193,7 +1223,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
         const page = await res.json();
 
         if (types.pages) {
-          filesToDownload.push(
+          filesToDownload.push(Object.assign(
             buildDocEntry(
               page.title,
               cleanCanvasHtml(page.body || ""),
@@ -1201,8 +1231,9 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
               "Pages/",
               "page",
               page.url
-            )
-          );
+            ),
+            { updatedAt: page.updated_at || null, meta: { updated_at: page.updated_at || null, front_page: !!page.front_page } }
+          ));
           exportedPagesCount++;
         }
 
@@ -1464,7 +1495,13 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
 
       filesToDownload.push(Object.assign(
         buildDocEntry(quiz.title, body, safeQuiz, quizPath, "quiz", String(quiz.id)),
-        quiz.assignment_id ? { assignmentId: String(quiz.assignment_id) } : {}
+        quiz.assignment_id ? { assignmentId: String(quiz.assignment_id) } : {},
+        { updatedAt: quiz.updated_at || null, meta: {
+          due_at: quiz.due_at || null, points_possible: quiz.points_possible ?? null,
+          question_count: quiz.question_count ?? null, time_limit: quiz.time_limit ?? null,
+          allowed_attempts: quiz.allowed_attempts ?? null, quiz_type: quiz.quiz_type || null,
+          assignment_id: quiz.assignment_id != null ? String(quiz.assignment_id) : null,
+        } }
       ));
       quizCount++;
     }
@@ -1587,38 +1624,6 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
     log(msg);
   }
 
-  // --- Export manifest -------------------------------------------------------
-  const manifest = {
-    course: courseName,
-    courseId,
-    sourceUrl: `${domain}/courses/${courseId}`,
-    exportDate: new Date().toISOString(),
-    extensionVersion: chrome.runtime.getManifest().version,
-    counts: {
-      files: files.length,
-      pages: exportedPagesCount,
-      assignments: assignments.length,
-      announcements: announcements.length,
-      discussions: discussions.length,
-      discussionReplies: discussionReplyCount,
-      studentSubmissions: studentSubmissionCount,
-      gradebookStudents: gradebookStudentCount,
-      quizzes: quizCount,
-      modules: modules.length,
-      extractedFiles: filesToDownload.filter((f) => f.path === "Extracted_Files/").length,
-      inaccessibleLinkedFiles: inaccessibleLinks.length,
-      skippedIncremental: skippedCount,
-      skippedFilters: filteredOutCount,
-      total: filesToDownload.length,
-    },
-  };
-
-  filesToDownload.push({
-    url: `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(manifest, null, 2))}`,
-    filename: "manifest.json",
-    path: "",
-  });
-
   // --- Path length safety (Windows 260-char limit) -------------------------
   const safeCourse = sanitizeFilename(courseName);
   for (const file of filesToDownload) {
@@ -1716,11 +1721,64 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       ? toMarkdownDataUri(f.title, htmlToMarkdown(rewritten))
       : toHtmlDataUri(f.title, rewritten, f.path);
     delete f.rawBody;
-    delete f.title;
-    delete f.resourceType;
-    delete f.resourceId;
     delete f.assignmentId;
+    // `title`, `resourceType`, `resourceId` are kept: the schema-2 manifest below
+    // derives item identity from them.
   }
+
+  // --- Export manifest (schema 2) ------------------------------------------
+  // Built last so every path is final (truncated, de-duplicated, rewritten).
+  // `items` is what the canvas-sync pipeline keys versions on; `counts` stays
+  // for older consumers.
+  const manifestItems = buildManifestItems(filesToDownload, modules);
+  const manifest = {
+    schema: 2,
+    course: { id: String(courseId), name: courseName, domain },
+    exportedAt: new Date().toISOString(),
+    extensionVersion: chrome.runtime.getManifest().version,
+    role: isTeacher ? "teacher" : "student",
+    complete: true,
+    failedPaths: [],
+    // legacy fields
+    courseId,
+    sourceUrl: `${domain}/courses/${courseId}`,
+    counts: {
+      files: files.length,
+      pages: exportedPagesCount,
+      assignments: assignments.length,
+      announcements: announcements.length,
+      discussions: discussions.length,
+      discussionReplies: discussionReplyCount,
+      studentSubmissions: studentSubmissionCount,
+      gradebookStudents: gradebookStudentCount,
+      quizzes: quizCount,
+      modules: modules.length,
+      extractedFiles: filesToDownload.filter((f) => f.path === "Extracted_Files/").length,
+      inaccessibleLinkedFiles: inaccessibleLinks.length,
+      skippedIncremental: skippedCount,
+      skippedFilters: filteredOutCount,
+      total: filesToDownload.length,
+    },
+    items: manifestItems,
+  };
+  const manifestEntry = {
+    url: "",
+    filename: "manifest.json",
+    path: "",
+    conflictAction: "overwrite",
+  };
+  const encodeManifest = () => {
+    manifestEntry.url = `data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(manifest, null, 2))}`;
+  };
+  encodeManifest();
+  // ZIP mode calls this just before archiving the manifest so fetch failures
+  // recorded during the archive are reflected in `complete` / `failedPaths`.
+  manifestEntry.finalize = (failedPaths) => {
+    manifest.complete = failedPaths.length === 0;
+    manifest.failedPaths = failedPaths.slice();
+    encodeManifest();
+  };
+  filesToDownload.push(manifestEntry);
 
   // --- ZIP mode or individual download handoff --------------------------------
   log(`${filesToDownload.length} files ready.`);
@@ -1766,7 +1824,9 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       {
         type: "START_DOWNLOAD",
         payload: {
-          files: filesToDownload,
+          // Strip the manifest's `finalize` function: Firefox structured-clones
+          // messages and refuses functions (Chrome would silently drop it).
+          files: filesToDownload.map((f) => { const { finalize, ...rest } = f; return rest; }),
           courseName,
           conflictAction: settings.conflictAction,
           throttleMs: settings.throttleMs,
