@@ -70,8 +70,10 @@ def _notify(summary: str) -> None:
 def _after_commit(store: Store, run_id: int, warnings: list[str]) -> tuple[Path | None, str]:
     from .changes import compute_changes
     from .report import one_line, write_report
+    from .materialize import rebuild_latest
     cs = compute_changes(store, run_id)
     path = write_report(store, cs)
+    rebuild_latest(store, cs.course_id)
     return path, one_line(cs)
 
 
