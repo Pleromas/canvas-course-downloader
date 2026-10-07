@@ -68,7 +68,11 @@ def _notify(summary: str) -> None:
 # Hook filled in by later tasks (report rendering, latest/ rebuild). Kept as a
 # module attribute so ingest stays testable before those modules exist.
 def _after_commit(store: Store, run_id: int, warnings: list[str]) -> tuple[Path | None, str]:
-    return None, ""
+    from .changes import compute_changes
+    from .report import one_line, write_report
+    cs = compute_changes(store, run_id)
+    path = write_report(store, cs)
+    return path, one_line(cs)
 
 
 def ingest_zip(store: Store, zip_path: Path, keep: bool = True, notify: bool = False) -> IngestResult:
