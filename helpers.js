@@ -553,3 +553,67 @@ function truncateFilename(filename, courseName, filePath, maxPath = 250) {
   }
   return filename;
 }
+
+// ---------------------------------------------------------------------------
+// Export manifest (schema 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Builds the `items` array for the schema-2 export manifest from the final
+ * `filesToDownload` entries plus the fetched module list. Identity rules:
+ *   - generated documents: `resourceType` + `resourceId` (assignment, quiz, page,
+ *     announcement, discussion, submission); module-index/syllabus/grading-weights
+ *     fall through to synthetic
+ *   - real course files: `canvasId`; Canvas media: `mediaId`
+ *   - anything else generated (CSV, styles): synthetic, keyed by lowercased path
+ *   - modules have no file of their own and are listed from `modules`
+ * The manifest file itself is excluded. Pure function, no DOM.
+ */
+function buildManifestItems(entries, modules) {
+  const TYPED = new Set(["assignment", "quiz", "page", "announcement", "discussion", "submission"]);
+  const items = [];
+  for (const e of entries || []) {
+    const fullPath = `${e.path || ""}${e.filename || ""}`;
+    if (fullPath === "manifest.json") continue;
+    const base = {
+      path: fullPath,
+      title: e.title || e.filename || "",
+      updatedAt: e.updatedAt || null,
+      size: typeof e.size === "number" && e.size > 0 ? e.size : null,
+      meta: { ...(e.meta || {}) },
+      sourceCourseId: e.sourceCourseId || null,
+    };
+    if (TYPED.has(e.resourceType) && e.resourceId) {
+      items.push({ type: e.resourceType, canvasId: String(e.resourceId), ...base });
+    } else if (e.canvasId) {
+      if (e.contentType) base.meta.content_type = e.contentType;
+      items.push({ type: "file", canvasId: String(e.canvasId), ...base });
+    } else if (e.mediaId) {
+      if (e.contentType) base.meta.content_type = e.contentType;
+      items.push({ type: "media", canvasId: String(e.mediaId), ...base });
+    } else {
+      items.push({ type: "synthetic", key: fullPath.toLowerCase(), ...base });
+    }
+  }
+  for (const m of modules || []) {
+    items.push({
+      type: "module",
+      canvasId: String(m.id),
+      path: null,
+      title: m.name || "",
+      updatedAt: null,
+      size: null,
+      meta: {
+        position: m.position ?? null,
+        items: (m.items || []).map((it) => ({
+          id: String(it.id),
+          type: it.type || "",
+          title: it.title || "",
+          contentId: it.page_url || (it.content_id != null ? String(it.content_id) : null),
+        })),
+      },
+      sourceCourseId: null,
+    });
+  }
+  return items;
+}
