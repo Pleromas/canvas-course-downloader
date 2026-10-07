@@ -332,11 +332,13 @@ async function downloadAsZip(files, courseName, settings, log) {
 
   const url = URL.createObjectURL(blob);
   const prefix = settings.folderPrefix ? `${sanitizeFilename(settings.folderPrefix)}/` : "";
-  const filename = `${prefix}${safeName}.zip`;
+  const filename = `${safeName}.zip`;
 
   await new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(
-      { type: "START_DOWNLOAD", payload: { files: [{ url, filename, path: "" }], courseName: "", conflictAction: settings.conflictAction, throttleMs: 0, folderPrefix: "" } },
+      // `path` carries the folder: the background sanitizer replaces "/" inside
+      // `filename`, so a prefix embedded there used to collapse into "prefix-course.zip".
+      { type: "START_DOWNLOAD", payload: { files: [{ url, filename, path: prefix }], courseName: "", conflictAction: settings.conflictAction, throttleMs: 0, folderPrefix: "" } },
       (response) => {
         if (chrome.runtime.lastError) return reject(chrome.runtime.lastError);
         resolve(response);
