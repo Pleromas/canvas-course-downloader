@@ -5,3 +5,7 @@
 node_modules/
 .claude/
 _metadata/
+sync/**/__pycache__/
+sync/*.egg-info/
+sync/build/
+.superpowers/
