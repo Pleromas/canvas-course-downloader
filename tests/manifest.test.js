@@ -5,12 +5,11 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 // helpers.js is a browser script with top-level function declarations. Evaluate it
-// in a sandbox that stubs the DOM bits its unrelated functions touch at call time.
+// in this context (not a separate vm context) so the arrays/objects it returns share
+// our realm and strict deepEqual works. Its DOM-touching functions are never called here.
 const src = fs.readFileSync(path.join(__dirname, "..", "helpers.js"), "utf8");
-const sandbox = { document: {}, getComputedStyle: () => ({ getPropertyValue: () => "" }), console };
-vm.createContext(sandbox);
-vm.runInContext(src + "\nthis.buildManifestItems = typeof buildManifestItems === 'function' ? buildManifestItems : undefined;", sandbox);
-const { buildManifestItems } = sandbox;
+vm.runInThisContext(src, { filename: "helpers.js" });
+const buildManifestItems = globalThis.buildManifestItems;
 
 test("doc entries become typed items keyed by resourceId", () => {
   const items = buildManifestItems([
