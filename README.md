@@ -287,4 +287,7 @@ ZIP exports into a content-addressed archive and reports what changed between ex
 
 Set the extension to ZIP mode with folder prefix `CanvasExports`. Each export produces one
 report under `~/CanvasArchive/reports/<courseId>/` and a browsable tree under
-`~/CanvasArchive/latest/<course>/`. Design: `docs/superpowers/specs/2026-10-06-canvas-sync-design.md`.
+`~/CanvasArchive/latest/<course>/`. That tree (and any `checkout`) is a read-only view made
+of hardlinks into the object store; copy files out before editing them. Exports made with
+Incremental mode, file filters, or some content types unticked are recorded as partial and
+never cause "removed" entries for what they left out. Design: `docs/superpowers/specs/2026-10-06-canvas-sync-design.md`.

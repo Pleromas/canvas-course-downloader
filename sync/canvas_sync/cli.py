@@ -18,6 +18,12 @@ from .verify import gc, verify
 DEFAULT_INBOX = Path.home() / "Downloads" / "CanvasExports"
 
 
+def _notify_error(msg: str) -> None:
+    exe = shutil.which("notify-send")
+    if exe:
+        subprocess.run([exe, "--urgency=critical", "Canvas sync failed", msg], check=False)
+
+
 def _course_rows(store: Store):
     return store.db.execute(
         "select c.id, c.name, count(r.id) as runs, max(r.exported_at) as last "
@@ -30,8 +36,12 @@ def _ingest_paths(store: Store, paths, delete: bool, notify: bool) -> int:
         p = Path(p)
         try:
             res = ingest_zip(store, p, keep=not delete, notify=notify)
-        except ManifestError as e:
-            print(f"{p.name}: {e}")
+        except Exception as e:  # one broken ZIP must not block the others (systemd oneshot)
+            kind = "manifest" if isinstance(e, ManifestError) else type(e).__name__
+            msg = f"{p.name}: {kind}: {e}"
+            print(msg)
+            if notify:
+                _notify_error(msg)
             code = 2
             continue
         print(res.summary if not res.skipped else f"{p.name}: skipped — {res.reason}")

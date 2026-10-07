@@ -63,6 +63,8 @@ def rebuild_latest(store: Store, course_id: str) -> Path:
         raise ValueError(f"no runs for course {course_id}")
     idx = _load_index(store)
     new_dir = _safe_dir(run["name"])
+    if any(d == new_dir and cid != course_id for cid, d in idx.items()):
+        new_dir = f"{new_dir} ({course_id})"  # another course already owns that name
     old_dir = idx.get(course_id)
     if old_dir and old_dir != new_dir and (store.latest / old_dir).exists():
         shutil.rmtree(store.latest / old_dir)

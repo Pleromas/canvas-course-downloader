@@ -584,7 +584,9 @@ function buildManifestItems(entries, modules) {
       sourceCourseId: e.sourceCourseId || null,
     };
     if (TYPED.has(e.resourceType) && e.resourceId) {
-      items.push({ type: e.resourceType, canvasId: String(e.resourceId), ...base });
+      // `manifestKey` lets an entry keep a URL-oriented resourceId (page slug, used
+      // for link rewriting) while the manifest identity is the stable Canvas id.
+      items.push({ type: e.resourceType, canvasId: String(e.manifestKey || e.resourceId), ...base });
     } else if (e.canvasId) {
       if (e.contentType) base.meta.content_type = e.contentType;
       items.push({ type: "file", canvasId: String(e.canvasId), ...base });
@@ -616,4 +618,28 @@ function buildManifestItems(entries, modules) {
     });
   }
   return items;
+}
+
+/**
+ * Item types a given content-type selection exports, for the manifest's
+ * `exportedTypes`. The pipeline only declares items of these types removed when
+ * they are absent; everything else was simply not exported. `synthetic`
+ * (Grades.csv, Syllabus, Modules index, styles…) is included only when every
+ * content type is on, since each synthetic document belongs to a different type.
+ */
+function exportedItemTypes(types) {
+  const t = types || {};
+  const out = [];
+  if (t.files || t.linkedFiles) out.push("file", "media");
+  if (t.pages) out.push("page");
+  if (t.assignments) out.push("assignment");
+  if (t.submissions) out.push("submission");
+  if (t.discussions) out.push("discussion");
+  if (t.announcements) out.push("announcement");
+  if (t.modules) out.push("module");
+  if (t.quizzes) out.push("quiz");
+  const all = ["files", "pages", "assignments", "submissions", "discussions", "announcements",
+    "modules", "syllabus", "grades", "quizzes", "linkedFiles"];
+  if (all.every((k) => t[k])) out.push("synthetic");
+  return out;
 }

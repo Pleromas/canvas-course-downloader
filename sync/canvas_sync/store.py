@@ -79,6 +79,9 @@ class Store:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, dest)
+        # Read-only: latest/ and checkouts hardlink these files, so an in-place
+        # edit there would silently corrupt the history store.
+        os.chmod(dest, 0o444)
         return sha
 
     def read_blob(self, sha: str) -> bytes:

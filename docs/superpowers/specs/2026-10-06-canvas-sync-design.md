@@ -91,17 +91,21 @@ Item types and their `meta`:
 |---|---|---|
 | assignment | assignment id | due_at, lock_at, unlock_at, points_possible, submission_types, published |
 | quiz | quiz id | due_at, points_possible, question_count, time_limit, allowed_attempts, quiz_type, assignment_id |
-| page | page slug | updated_at, front_page |
+| page | `page_id` (slug kept in `meta.slug`; Canvas regenerates the slug on rename) | updated_at, front_page, slug |
 | announcement | topic id | posted_at |
 | discussion | topic id | posted_at, assignment_id |
 | module | module id | position, items (ordered list of {id,type,title,contentId}) |
 | file | file id | size, folder, source (where linked from), content_type |
 | media | media id | title, source |
-| submission | assignment id | score, grade, graded_at, submitted_at, attempt, comment_count |
+| submission | assignment id (student export) or `assignment_id:user_id` (teacher export, one doc per student) | score, grade, graded_at, submitted_at, attempt, comment_count |
 | synthetic | `key` instead | none (Grades.csv, Modules.html, Syllabus.html, styles.css, _inaccessible_links.csv) |
 
-`complete` is true when the export finished without the ZIP fetch loop failing any
-file; `failedPaths` lists failures otherwise. Modules have no file of their own; their
+`complete` is true when the export covered everything it was asked for: no ZIP fetch
+failures (`failedPaths` lists them), no incremental-mode skips, no video/size filter
+exclusions. `exportedTypes` lists the item types the content-type settings enabled
+(`synthetic` only when every type is on); the pipeline declares an item removed only when
+its type is in `exportedTypes` and the run is complete. Duplicate `(type, key)` pairs in a
+manifest are collapsed to the first occurrence with a warning. Modules have no file of their own; their
 version is the `meta` alone. `path` is relative to the ZIP root and uses the final,
 de-duplicated filename.
 
@@ -147,8 +151,11 @@ differs from the item's latest version. Otherwise only `items.last_run` advances
 `removed_run` is set when an item is absent from a run with `complete = 1` and cleared
 if it reappears.
 
-Blob writes are atomic: write to `objects/tmp/<uuid>`, fsync, rename. Existing blob
-with same hash is never rewritten.
+Blob writes are atomic: write to `objects/tmp/<uuid>`, fsync, rename, then `chmod 0444`.
+Existing blob with same hash is never rewritten. `latest/` and checkouts are hardlinks
+into `objects/`, so they are read-only views: editing them in place is refused by the
+filesystem rather than silently corrupting history. Two courses with the same name get
+`latest/<name>/` and `latest/<name> (<courseId>)/`.
 
 ## Part C: ingest
 
@@ -173,8 +180,12 @@ with same hash is never rewritten.
 10. Rebuild `latest/<courseName>/` from this run's paths (delete and relink).
 11. Move the ZIP to `processed/` (or delete, per config).
 
-Everything from step 5 to 7 runs in one SQLite transaction. A crash before commit
-leaves orphan blobs only; `gc` removes them.
+Steps 5 to 8 run in one SQLite transaction committed only after the snapshot file is on
+disk; a crash before that leaves orphan blobs only (`gc` removes them). If the report or
+`latest/` rebuild fails after the commit, the ZIP stays in the inbox and the next ingest
+of the same ZIP hash finishes those steps instead of reporting "already ingested". Items
+listed in the manifest but not fetched (failed, or of a type not exported) keep their
+last known file in the snapshot so `latest/` never loses a file over one bad run.
 
 ## Part D: change detection and report
 

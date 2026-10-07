@@ -49,6 +49,7 @@ class CliTests(TempStore):
         make_zip(self.root / "in/a.zip", base_manifest(items=[A1]), {"Assignments/A1.html": b"x"})
         self.run_cli("ingest", str(self.root / "in/a.zip"))
         sha = self.store.db.execute("select sha256 from versions").fetchone()[0]
+        self.store.blob_path(sha).chmod(0o644)  # blobs are read-only; simulate external damage
         self.store.blob_path(sha).write_bytes(b"bad")
         code, out = self.run_cli("verify")
         self.assertEqual(code, 1)

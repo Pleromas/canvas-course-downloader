@@ -88,7 +88,19 @@ def ingest_zip(store: Store, zip_path: Path, keep: bool = True, notify: bool = F
 
     with zf:
         zip_sha = _file_sha(zip_path)
-        if store.db.execute("select 1 from runs where zip_sha256=?", (zip_sha,)).fetchone():
+        prior = store.db.execute(
+            "select r.id, r.course_id, r.exported_at, r.report_path, c.name from runs r "
+            "join courses c on c.id=r.course_id where r.zip_sha256=?", (zip_sha,)).fetchone()
+        if prior:
+            if prior["report_path"] is None:
+                # Committed earlier but the post-commit steps (report, latest/) failed:
+                # finish them now instead of declaring the ZIP done.
+                report_path, summary = _after_commit(store, prior["id"], [])
+                _move_processed(store, zip_path, keep)
+                if notify:
+                    _notify(summary)
+                return IngestResult(prior["id"], prior["course_id"], prior["name"], prior["exported_at"], False,
+                                    "", report_path, summary or f"{prior['name']}: run {prior['id']} repaired")
             _move_processed(store, zip_path, keep)
             return IngestResult(None, None, None, None, True, "already ingested (same ZIP hash)")
 
@@ -98,7 +110,7 @@ def ingest_zip(store: Store, zip_path: Path, keep: bool = True, notify: bool = F
             raise ManifestError(f"{zip_path.name}: no manifest.json in ZIP")
 
         names = set(zf.namelist())
-        warnings: list[str] = []
+        warnings: list[str] = list(manifest.warnings)
         blobs: dict[str, tuple[str, int]] = {}  # path -> (sha, size)
         for item in manifest.items:
             if not item.path:
@@ -116,19 +128,28 @@ def ingest_zip(store: Store, zip_path: Path, keep: bool = True, notify: bool = F
                 "insert or ignore into blobs(sha256,size,mime,first_seen) values(?,?,?,?)",
                 (sha, len(data), mime, _now()))
 
-        run_id = _record_run(store, manifest, zip_sha, blobs, warnings)
-        snapshot = store.snapshots / manifest.course_id / f"{_safe_stamp(manifest.exported_at)}_run{run_id}.json"
-        snapshot.parent.mkdir(parents=True, exist_ok=True)
-        snapshot.write_text(json.dumps({
-            "run_id": run_id,
-            "course": {"id": manifest.course_id, "name": manifest.course_name, "domain": manifest.domain},
-            "exported_at": manifest.exported_at,
-            "complete": manifest.complete,
-            "files": {p: s for p, (s, _) in blobs.items()},
-            "items": [{"type": i.type, "key": i.key, "path": i.path, "title": i.title, "meta": i.meta} for i in manifest.items],
-        }, indent=1))
-        store.db.execute("update runs set snapshot_path=? where id=?", (str(snapshot), run_id))
-        store.db.commit()
+        try:
+            run_id, carried = _record_run(store, manifest, zip_sha, blobs, warnings)
+            files = {p: s for p, (s, _) in blobs.items()}
+            # Items listed but not fetched this run keep their last known file in the
+            # snapshot, so latest/ never loses a file over one transient failure.
+            for path, sha in carried.items():
+                files.setdefault(path, sha)
+            snapshot = store.snapshots / manifest.course_id / f"{_safe_stamp(manifest.exported_at)}_run{run_id}.json"
+            snapshot.parent.mkdir(parents=True, exist_ok=True)
+            snapshot.write_text(json.dumps({
+                "run_id": run_id,
+                "course": {"id": manifest.course_id, "name": manifest.course_name, "domain": manifest.domain},
+                "exported_at": manifest.exported_at,
+                "complete": manifest.complete,
+                "files": files,
+                "items": [{"type": i.type, "key": i.key, "path": i.path, "title": i.title, "meta": i.meta} for i in manifest.items],
+            }, indent=1))
+            store.db.execute("update runs set snapshot_path=? where id=?", (str(snapshot), run_id))
+            store.db.commit()
+        except BaseException:
+            store.db.rollback()
+            raise
 
     report_path, summary = _after_commit(store, run_id, warnings)
     if not summary:
@@ -142,8 +163,12 @@ def ingest_zip(store: Store, zip_path: Path, keep: bool = True, notify: bool = F
                         "", report_path, summary)
 
 
-def _record_run(store: Store, m: Manifest, zip_sha: str, blobs: dict, warnings: list[str]) -> int:
+def _record_run(store: Store, m: Manifest, zip_sha: str, blobs: dict, warnings: list[str]) -> tuple[int, dict[str, str]]:
+    """Insert the run, items and versions. Does NOT commit; the caller commits after
+    the snapshot is on disk. Returns (run_id, carried) where `carried` maps path -> sha
+    for items listed in the manifest but not fetched this run."""
     db = store.db
+    carried: dict[str, str] = {}
     now = _now()
     db.execute(
         "insert into courses(id,name,domain,first_seen,last_seen) values(?,?,?,?,?) "
@@ -163,9 +188,13 @@ def _record_run(store: Store, m: Manifest, zip_sha: str, blobs: dict, warnings: 
         if has_file and it.path not in blobs:
             # Listed but not fetched (failed or missing from the ZIP): the item still
             # exists on Canvas, so it must not count as removed; it just gets no new
-            # version this run.
+            # version this run, and latest/ keeps its last known file.
             if row:
                 seen_item_ids.append(row["id"])
+                last = db.execute("select path, sha256 from versions where item_id=? order by id desc limit 1",
+                                  (row["id"],)).fetchone()
+                if last and last["sha256"] and last["path"]:
+                    carried[last["path"]] = last["sha256"]
             continue
         sha, size = blobs[it.path] if has_file else (None, None)
         meta_json = canonical_meta(it.meta)
@@ -187,12 +216,24 @@ def _record_run(store: Store, m: Manifest, zip_sha: str, blobs: dict, warnings: 
                 (item_id, run_id, sha, size, it.path, it.title, meta_json))
 
     if m.complete:
-        placeholders = ",".join("?" * len(seen_item_ids)) or "NULL"
-        db.execute(
-            f"update items set removed_run=? where course_id=? and removed_run is NULL and id not in ({placeholders})",
-            (run_id, m.course_id, *seen_item_ids))
-    db.commit()
-    return run_id
+        # Only item types this export actually covered can be declared removed; an
+        # export with Quizzes unticked says nothing about quizzes.
+        candidates = db.execute("select i.id as id, i.type as type, v.path as path from items i join versions v on v.id = "
+                                "(select id from versions where item_id=i.id order by id desc limit 1) "
+                                "where i.course_id=? and i.removed_run is NULL", (m.course_id,)).fetchall()
+        seen = set(seen_item_ids)
+        for c in candidates:
+            if c["id"] in seen:
+                continue
+            if m.exported_types is not None and c["type"] not in m.exported_types:
+                if c["path"]:
+                    last = db.execute("select path, sha256 from versions where item_id=? order by id desc limit 1",
+                                      (c["id"],)).fetchone()
+                    if last and last["sha256"]:
+                        carried[last["path"]] = last["sha256"]
+                continue
+            db.execute("update items set removed_run=? where id=?", (run_id, c["id"]))
+    return run_id, carried
 
 
 def ingest_dir(store: Store, directory: Path, keep: bool = True, notify: bool = False) -> list[IngestResult]:

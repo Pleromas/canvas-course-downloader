@@ -13,6 +13,7 @@ class VerifyTests(TempStore):
     def test_corrupt_blob_detected(self):
         ingest_zip(self.store, make_zip(self.root / "in/a.zip", base_manifest(items=[A1]), {"Assignments/A1.html": b"x"}))
         sha = self.store.db.execute("select sha256 from versions").fetchone()[0]
+        self.store.blob_path(sha).chmod(0o644)  # blobs are read-only; simulate external damage
         self.store.blob_path(sha).write_bytes(b"corrupted")
         problems = verify(self.store)
         self.assertEqual(len(problems), 1)

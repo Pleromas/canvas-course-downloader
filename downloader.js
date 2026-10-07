@@ -907,7 +907,10 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
     }
     const stem = sanitizeFilename(studentName).substring(0, 80) || "submission";
     filesToDownload.push(Object.assign(
-      buildDocEntry(`${a.name} — ${studentName}`, body, stem, folder, "submission", String(a.id)),
+      // Teacher archives hold one submission doc per student per assignment, so the
+      // identity must include the student; a student's own export has one per assignment.
+      buildDocEntry(`${a.name} — ${studentName}`, body, stem, folder, "submission",
+        isTeacher && s.user_id != null ? `${a.id}:${s.user_id}` : String(a.id)),
       { updatedAt: s.graded_at || s.submitted_at || null, meta: {
         score: s.score ?? null, grade: s.grade ?? null, graded_at: s.graded_at || null,
         submitted_at: s.submitted_at || null, attempt: s.attempt ?? null,
@@ -1232,7 +1235,13 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
               "page",
               page.url
             ),
-            { updatedAt: page.updated_at || null, meta: { updated_at: page.updated_at || null, front_page: !!page.front_page } }
+            {
+              // Link rewriting needs the slug (resourceId); versioning needs an id that
+              // survives a rename, and Canvas regenerates the slug from the title.
+              manifestKey: page.page_id != null ? String(page.page_id) : undefined,
+              updatedAt: page.updated_at || null,
+              meta: { updated_at: page.updated_at || null, front_page: !!page.front_page, slug: page.url },
+            }
           ));
           exportedPagesCount++;
         }
@@ -1737,8 +1746,11 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
     exportedAt: new Date().toISOString(),
     extensionVersion: chrome.runtime.getManifest().version,
     role: isTeacher ? "teacher" : "student",
-    complete: true,
+    // Incremental mode and the video/size filters leave items out on purpose;
+    // the pipeline must not read their absence as deletion.
+    complete: skippedCount === 0 && filteredOutCount === 0,
     failedPaths: [],
+    exportedTypes: exportedItemTypes(types),
     // legacy fields
     courseId,
     sourceUrl: `${domain}/courses/${courseId}`,
@@ -1774,7 +1786,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
   // ZIP mode calls this just before archiving the manifest so fetch failures
   // recorded during the archive are reflected in `complete` / `failedPaths`.
   manifestEntry.finalize = (failedPaths) => {
-    manifest.complete = failedPaths.length === 0;
+    manifest.complete = manifest.complete && failedPaths.length === 0;
     manifest.failedPaths = failedPaths.slice();
     encodeManifest();
   };

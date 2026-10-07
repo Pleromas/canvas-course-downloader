@@ -40,6 +40,8 @@ class Manifest:
     failed_paths: list[str]
     counts: dict
     items: list[Item]
+    exported_types: list[str] | None = None   # None = everything (legacy / full export)
+    warnings: list[str] = field(default_factory=list)
 
 
 def _item(raw: dict, index: int) -> Item:
@@ -73,7 +75,18 @@ def parse_manifest(data: dict) -> Manifest:
             raise ManifestError(f"manifest course.{k} missing")
     if not data.get("exportedAt"):
         raise ManifestError("manifest exportedAt missing")
-    items = [_item(raw, i) for i, raw in enumerate(data.get("items") or [])]
+    items: list[Item] = []
+    warnings: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for i, raw in enumerate(data.get("items") or []):
+        it = _item(raw, i)
+        ident = (it.type, it.key)
+        if ident in seen:
+            warnings.append(f"duplicate identity {it.type}:{it.key} ({it.path}); kept the first")
+            continue
+        seen.add(ident)
+        items.append(it)
+    exported = data.get("exportedTypes")
     return Manifest(
         schema=schema,
         course_id=str(course["id"]),
@@ -86,4 +99,6 @@ def parse_manifest(data: dict) -> Manifest:
         failed_paths=list(data.get("failedPaths") or []),
         counts=dict(data.get("counts") or {}),
         items=items,
+        exported_types=[str(t) for t in exported] if isinstance(exported, list) else None,
+        warnings=warnings,
     )
