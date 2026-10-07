@@ -275,3 +275,16 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License
 
 [MIT](LICENSE)
+
+## Versioned archive (canvas-sync)
+
+`sync/` contains an optional, dependency-free Python tool that ingests this extension's
+ZIP exports into a content-addressed archive and reports what changed between exports.
+
+    cd sync && pip install --user -e .
+    canvas-sync install-units        # watch ~/Downloads/CanvasExports (systemd --user)
+    canvas-sync status | log <course> | diff <course> type:id runA runB | checkout <course> run dir | verify | gc
+
+Set the extension to ZIP mode with folder prefix `CanvasExports`. Each export produces one
+report under `~/CanvasArchive/reports/<courseId>/` and a browsable tree under
+`~/CanvasArchive/latest/<course>/`. Design: `docs/superpowers/specs/2026-10-06-canvas-sync-design.md`.
