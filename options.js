@@ -18,7 +18,7 @@ const DEFAULTS = {
     quizzes: true,
     linkedFiles: true,
   },
-  conflictAction: "uniquify",
+  conflictAction: "overwrite",
   throttleMs: 250,
   folderPrefix: "",
   zipMode: true,

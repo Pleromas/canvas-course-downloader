@@ -125,7 +125,7 @@ Open settings from the extension popup or your browser's extension options page.
 | --- | --- |
 | Content types | Toggle what to export, split into two groups — *Course content*: files, pages, assignments, syllabus, modules, announcements, linked/extracted files; *Student data & grades*: student submissions, discussions, grades, quizzes |
 | Presets | Quick-select common combos: Full Archive, Files Only, Text Content Only, Linked Files Only |
-| File conflict handling | Choose Rename (add a number suffix) or Overwrite when a file already exists |
+| File conflict handling | Overwrite (default) or Rename (add a number suffix) when a real course file already exists. Generated documents (pages, CSVs, manifest) are always overwritten |
 | Download throttle | Delay between downloads in milliseconds (default 250, range 50–5000) |
 | Folder prefix | Custom string prepended to all download paths |
 | ZIP bundling | Bundle each course into a single `.zip` file (on by default; falls back to loose files above ~1.5 GB) |

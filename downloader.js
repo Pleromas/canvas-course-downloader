@@ -15,7 +15,7 @@ const SETTING_DEFAULTS = {
     announcements: true, modules: true, syllabus: true, grades: true,
     quizzes: true, linkedFiles: true,
   },
-  conflictAction: "uniquify",
+  conflictAction: "overwrite",
   throttleMs: 250,
   folderPrefix: "",
   zipMode: true,
@@ -775,6 +775,15 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
   }
   if (types.assignments) {
     for (const a of assignments) {
+      // Graded quizzes and graded discussions are mirrored by Canvas as
+      // assignment shells (submission_types ["online_quiz"] / ["discussion_topic"]).
+      // Their real content is exported by the Quizzes / Discussions blocks, so
+      // skip the shell here to avoid a near-empty duplicate under Assignments/.
+      // Links to /assignments/<id> are still resolved: the quiz/discussion
+      // entry carries `assignmentId` for the URL map.
+      const subTypes = a.submission_types || [];
+      if (types.quizzes && subTypes.includes("online_quiz")) continue;
+      if (types.discussions && subTypes.includes("discussion_topic")) continue;
       let body = "";
       if (a.due_at) body += `<p><strong>Due:</strong> ${formatDate(a.due_at)}</p>`;
       if (a.description) {
@@ -1081,7 +1090,10 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       }
 
       const safeName = sanitizeFilename(d.title).substring(0, 100);
-      filesToDownload.push(buildDocEntry(d.title, body, safeName, "Discussions/", "discussion", String(d.id)));
+      filesToDownload.push(Object.assign(
+        buildDocEntry(d.title, body, safeName, "Discussions/", "discussion", String(d.id)),
+        d.assignment_id ? { assignmentId: String(d.assignment_id) } : {}
+      ));
     }
   }
 
@@ -1442,7 +1454,16 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
         }
       }
 
-      filesToDownload.push(buildDocEntry(quiz.title, body, safeQuiz, quizPath, "quiz", String(quiz.id)));
+      // Question text, answer choices and the scraped review page embed
+      // images as /files/<id>/preview. Only the description was scanned
+      // before, so quiz images stayed remote (and vanish once the course
+      // closes). Scan the whole rendered body; seenFileIds dedupes.
+      if (types.linkedFiles) await extractLinkedFiles(body, `Quiz: ${quiz.title}`);
+
+      filesToDownload.push(Object.assign(
+        buildDocEntry(quiz.title, body, safeQuiz, quizPath, "quiz", String(quiz.id)),
+        quiz.assignment_id ? { assignmentId: String(quiz.assignment_id) } : {}
+      ));
       quizCount++;
     }
   }
@@ -1663,6 +1684,14 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       for (const k of f.mediaKeys) urlMap.set(k, target);
     }
   }
+  // Graded quizzes/discussions: Canvas links to them as /assignments/<id> too.
+  // Point those at the quiz/discussion document (the assignment shell itself
+  // is skipped above when the richer content type is enabled).
+  for (const f of filesToDownload) {
+    if (!f.assignmentId) continue;
+    const key = `${domain}/courses/${courseId}/assignments/${f.assignmentId}`;
+    if (!urlMap.has(key)) urlMap.set(key, `${f.path}${f.filename}`);
+  }
   // Dereference /modules/items/<id> URLs through the items→resource map.
   for (const [itemId, info] of moduleItemIdToResource) {
     let sourceUrl;
@@ -1688,6 +1717,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
     delete f.title;
     delete f.resourceType;
     delete f.resourceId;
+    delete f.assignmentId;
   }
 
   // --- ZIP mode or individual download handoff --------------------------------
@@ -1721,6 +1751,13 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
   // Individual downloads stream to disk through chrome.downloads, which
   // reports failures per job in the panel; record the inventory up front.
   saveIncrementalRecord();
+
+  // Generated documents (HTML/Markdown pages, CSVs, manifest, styles) are
+  // regenerated on every run, so a numbered copy is never wanted: always
+  // overwrite them. Real course files follow the user's conflict setting.
+  for (const f of filesToDownload) {
+    if (isSynthetic(f)) f.conflictAction = "overwrite";
+  }
 
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(

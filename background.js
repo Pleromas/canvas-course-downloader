@@ -14,7 +14,7 @@ let nextJobId = 0;
 let isProcessing = false;
 let cancelled = false;
 let sourceTabId = null;
-let downloadSettings = { conflictAction: "uniquify", throttleMs: 250, folderPrefix: "" };
+let downloadSettings = { conflictAction: "overwrite", throttleMs: 250, folderPrefix: "" };
 
 // Maps Chrome download IDs → job objects for onChanged tracking
 const chromeIdToJob = new Map();
@@ -38,7 +38,7 @@ function ensureStateLoaded() {
       isProcessing: false,
       cancelled: false,
       sourceTabId: null,
-      downloadSettings: { conflictAction: "uniquify", throttleMs: 250, folderPrefix: "" },
+      downloadSettings: { conflictAction: "overwrite", throttleMs: 250, folderPrefix: "" },
     }).then((s) => {
       jobs = s.jobs;
       nextJobId = s.nextJobId;
@@ -181,12 +181,23 @@ async function processQueue() {
   await persistState();
   broadcastStatus();
 
-  const sanitizedName = nextJob.filename.replace(/[/\\?%*:|"<>]/g, "-");
+  const sanitizedName = nextJob.filename
+    .replace(/[\u00A0\u1680\u2000-\u200B\u202F\u205F\u3000]/g, " ")  // exotic spaces -> normal space
+    .replace(/[\u0000-\u001F\u007F-\u009F\u200C-\u200F\u2028-\u202E\u2060-\u206F\uFEFF]/g, "")  // control/invisible chars
+    .replace(/[/\\?%*:|"<>]/g, "-")
+    .trim();
   let fullPath = `${nextJob.path}${sanitizedName}`;
   if (fullPath.startsWith("/")) fullPath = fullPath.substring(1);
 
   try {
-    const downloadId = await chrome.downloads.download({ url: nextJob.url, filename: fullPath, conflictAction: downloadSettings.conflictAction });
+    // Firefox: downloads.download() rejects data: URLs from extensions; convert to blob:
+    let dlUrl = nextJob.url;
+    if (dlUrl.startsWith("data:") && typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+      const blob = await (await fetch(dlUrl)).blob();
+      dlUrl = URL.createObjectURL(blob);
+      nextJob.blobUrl = dlUrl;
+    }
+    const downloadId = await chrome.downloads.download({ url: dlUrl, filename: fullPath, conflictAction: nextJob.conflictAction || downloadSettings.conflictAction });
     if (cancelled) {
       // User cancelled while this job was mid-handshake with chrome.downloads.
       // Cancel the started download immediately so the file isn't saved.
@@ -239,7 +250,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       // Store settings for this batch
       downloadSettings = {
-        conflictAction: conflictAction || "uniquify",
+        conflictAction: conflictAction || "overwrite",
         throttleMs: throttleMs || 250,
         folderPrefix: (folderPrefix || "").replace(/[/\\?%*:|"<>]/g, "-"),
       };
@@ -264,6 +275,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         state: STATE.QUEUED,
         chromeDownloadId: null,
         error: null,
+        // Per-file override (generated docs always overwrite); null = batch setting.
+        conflictAction: file.conflictAction || null,
       }));
 
       jobs.push(...newJobs);
