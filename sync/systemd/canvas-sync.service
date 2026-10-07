@@ -1,0 +1,10 @@
+[Unit]
+Description=Ingest Canvas course exports into the versioned archive
+
+[Service]
+Type=oneshot
+# @CANVAS_SYNC@ is replaced by `canvas-sync install-units` with the real executable.
+ExecStart=@CANVAS_SYNC@ ingest-all --notify
+# Firefox writes <name>.zip.part then renames; PathChanged fires on close, but a
+# second event can arrive mid-write. ingest-all leaves unreadable ZIPs in place
+# and the next event retries them, so no special handling here.

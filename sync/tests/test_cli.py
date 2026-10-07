@@ -59,3 +59,15 @@ class CliTests(TempStore):
         code, out = self.run_cli("ingest", str(self.root / "in/old.zip"))
         self.assertEqual(code, 2)
         self.assertIn("schema 2", out)
+
+from pathlib import Path as _P
+
+
+class UnitFileTests(TempStore):
+    def test_unit_files_present_and_templated(self):
+        d = _P(__file__).resolve().parent.parent / "systemd"
+        path_unit = (d / "canvas-sync.path").read_text()
+        svc = (d / "canvas-sync.service").read_text()
+        self.assertIn("PathChanged=%h/Downloads/CanvasExports", path_unit)
+        self.assertIn("ExecStart=@CANVAS_SYNC@ ingest-all --notify", svc)
+        self.assertIn("Type=oneshot", svc)

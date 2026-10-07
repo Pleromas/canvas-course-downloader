@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch ~/Downloads/CanvasExports for Canvas course exports
+
+[Path]
+PathChanged=%h/Downloads/CanvasExports
+MakeDirectory=yes
+Unit=canvas-sync.service
+
+[Install]
+WantedBy=default.target
