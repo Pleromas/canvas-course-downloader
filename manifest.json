@@ -41,7 +41,7 @@
   },
   "background": {
     "service_worker": "background.js",
-    "scripts": ["background.js"]
+    "scripts": ["sanitize.js", "background.js"]
   },
   "content_scripts": [
     {
@@ -49,6 +49,7 @@
         "https://*/*"
       ],
       "js": [
+        "sanitize.js",
         "zipwriter.js",
         "turndown.min.js",
         "turndown-plugin-gfm.min.js",

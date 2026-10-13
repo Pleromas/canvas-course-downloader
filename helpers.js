@@ -39,17 +39,15 @@ function darkenColor(hex, amount = 0.15) {
 
 /** Replaces characters that are invalid or problematic in file paths. */
 function sanitizeFilename(name) {
+  // Shared with the background script (sanitize.js) so a name that survives
+  // export-time cleaning is never rejected again at download time.
   if (!name) return "untitled";
-  const cleaned = name
-    .replace(/[\u0000-\u001F\u007F]/g, "")                          // control chars
-    .replace(/[\u200B-\u200D\uFEFF]/g, "")                          // zero-width chars
-    .replace(/\u00A0/g, " ")                                          // non-breaking space
-    .replace(/[/\\?%*:|"<>]/g, "-")                                   // OS-reserved chars
-    .replace(/^\.+/, "")                                              // leading dots
-    .replace(/[. ]+$/, "")                                            // trailing dots/spaces
-    .replace(/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|$)/i, "_$1$2") // Windows reserved names
-    .trim();
-  return cleaned || "untitled";
+  return sanitizePathSegment(name);
+}
+
+/** Escapes text for safe interpolation into HTML (exports and injected UI). */
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 /**
@@ -389,7 +387,8 @@ function relativePathToCourseRoot(filePath) {
 function toHtmlDataUri(title, body, filePath = "") {
   const safeBody = sanitizeHtml(body);
   const cssHref = `${relativePathToCourseRoot(filePath)}/styles.css`;
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title}</title><link rel="stylesheet" href="${cssHref}"></head><body><h1>${title}</h1>${safeBody}</body></html>`;
+  const safeTitle = escapeHtml(title);
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${safeTitle}</title><link rel="stylesheet" href="${cssHref}"></head><body><h1>${safeTitle}</h1>${safeBody}</body></html>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 

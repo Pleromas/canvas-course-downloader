@@ -7,6 +7,12 @@
  * broadcasting to the content script.
  */
 
+// Chrome runs this file as a service worker: pull in the shared sanitiser.
+// Firefox runs it as an event page with sanitize.js listed before it.
+if (typeof sanitizeDownloadPath === "undefined" && typeof importScripts === "function") {
+  importScripts("sanitize.js");
+}
+
 const STATE = { QUEUED: "queued", DOWNLOADING: "downloading", COMPLETE: "complete", FAILED: "failed" };
 
 let jobs = [];
@@ -196,13 +202,9 @@ async function processQueue() {
   await persistState();
   broadcastStatus();
 
-  const sanitizedName = nextJob.filename
-    .replace(/[\u00A0\u1680\u2000-\u200B\u202F\u205F\u3000]/g, " ")  // exotic spaces -> normal space
-    .replace(/[\u0000-\u001F\u007F-\u009F\u200C-\u200F\u2028-\u202E\u2060-\u206F\uFEFF]/g, "")  // control/invisible chars
-    .replace(/[/\\?%*:|"<>]/g, "-")
-    .trim();
-  let fullPath = `${nextJob.path}${sanitizedName}`;
-  if (fullPath.startsWith("/")) fullPath = fullPath.substring(1);
+  // Every path component is sanitised, not only the file name: a module or
+  // Canvas folder called "Lectures: Week 1" used to fail the whole download.
+  const fullPath = sanitizeDownloadPath(`${nextJob.path}/${sanitizePathSegment(nextJob.filename)}`);
 
   try {
     // Firefox: downloads.download() rejects data: URLs from extensions; convert to blob:

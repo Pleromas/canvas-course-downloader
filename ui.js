@@ -222,7 +222,7 @@ function updateDownloadPanel(status) {
     if (failedFiles.length > 0) {
       panel.querySelector("#cd-panel-failed-section").style.display = "";
       panel.querySelector("#cd-panel-failed-list").innerHTML = failedFiles
-        .map((f) => `<div style="padding:2px 0;border-bottom:1px solid #f0f0f0;">${sanitizeHtml(f.filename)} &mdash; <span style="color:#cf222e;">${sanitizeHtml(f.error || "Unknown error")}</span></div>`)
+        .map((f) => `<div style="padding:2px 0;border-bottom:1px solid #f0f0f0;">${escapeHtml(f.filename)} &mdash; <span style="color:#cf222e;">${escapeHtml(f.error || "Unknown error")}</span></div>`)
         .join("");
     } else {
       panel.querySelector("#cd-panel-failed-section").style.display = "none";
@@ -714,7 +714,7 @@ async function openCourseSelector() {
       header.className = "cd-term-header";
       header.innerHTML = `
         <div class="cd-term-label">
-          <span class="cd-term-name">${termName}</span>
+          <span class="cd-term-name">${escapeHtml(termName)}</span>
           <span class="cd-term-count">${termCourses.length}</span>
         </div>
         <div class="cd-term-actions">
@@ -736,16 +736,16 @@ async function openCourseSelector() {
         item.setAttribute("role", "listitem");
         item.dataset.searchable = `${course.name} ${course.course_code || ""} ${termName}`.toLowerCase();
         item.innerHTML = `
-          <input type="checkbox" id="cd-course-${course.id}" data-course-id="${course.id}" data-course-name="${course.name.replace(/"/g, "&quot;")}">
-          <label for="cd-course-${course.id}">
+          <input type="checkbox" id="cd-course-${escapeHtml(course.id)}" data-course-id="${escapeHtml(course.id)}" data-course-name="${escapeHtml(course.name)}">
+          <label for="cd-course-${escapeHtml(course.id)}">
             <span class="cd-checkbox" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M5 12l5 5L20 7"/>
               </svg>
             </span>
             <span class="cd-course-meta">
-              <span class="cd-course-name">${course.name}</span>
-              <span class="cd-course-code">${course.course_code || ""}</span>
+              <span class="cd-course-name">${escapeHtml(course.name)}</span>
+              <span class="cd-course-code">${escapeHtml(course.course_code || "")}</span>
             </span>
           </label>`;
 

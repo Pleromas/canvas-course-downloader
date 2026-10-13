@@ -96,8 +96,12 @@ document.addEventListener("DOMContentLoaded", () => {
         infoSection.style.display = "block";
 
         const courseName = response.courseName || tab.title?.split(":")[0].trim() || `Course ${response.courseId}`;
-        document.getElementById("courseName").innerHTML =
-          `<span class="info-value">${courseName}</span>`;
+        const nameEl = document.getElementById("courseName");
+        nameEl.textContent = "";
+        const span = document.createElement("span");
+        span.className = "info-value";
+        span.textContent = courseName;
+        nameEl.appendChild(span);
 
         downloadBtn.addEventListener("click", async () => {
           downloadBtn.disabled = true;

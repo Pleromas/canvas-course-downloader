@@ -41,11 +41,6 @@ function loadSettings() {
 // Python/regex rendering to the extension's DOM/JS style.
 // ---------------------------------------------------------------------------
 
-/** Escapes text for safe interpolation into exported HTML. */
-function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-}
-
 /** Renders a points value, dropping a redundant ".0" on whole numbers. */
 function fmtPoints(v) {
   if (v == null || v === "") return "";
@@ -1011,7 +1006,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
         const author = participantName.get(String(e.user_id)) || "Unknown user";
         const when = e.created_at ? formatDate(e.created_at) : "";
         const message = e.deleted ? "<em>[deleted]</em>" : cleanCanvasHtml(e.message || "");
-        html += `<li style="margin:12px 0"><p style="margin:0 0 4px"><strong>${author}</strong>${when ? ` · <span style="color:#666">${when}</span>` : ""}</p><div>${message}</div>`;
+        html += `<li style="margin:12px 0"><p style="margin:0 0 4px"><strong>${escapeHtml(author)}</strong>${when ? ` · <span style="color:#666">${when}</span>` : ""}</p><div>${message}</div>`;
 
         if (types.linkedFiles && e.message) await extractLinkedFiles(e.message, `Discussion reply: ${topicTitle}`);
 
@@ -1043,7 +1038,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
 
     for (const d of discussions) {
       let body = "";
-      if (d.user_name) body += `<p><strong>Author:</strong> ${d.user_name}</p>`;
+      if (d.user_name) body += `<p><strong>Author:</strong> ${escapeHtml(d.user_name)}</p>`;
       if (d.posted_at) body += `<p><strong>Posted:</strong> ${formatDate(d.posted_at)}</p>`;
       if (d.message) {
         body += `<div>${cleanCanvasHtml(d.message)}</div>`;
@@ -1125,7 +1120,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
 
     let modulesBody = "";
     for (const mod of modules) {
-      modulesBody += `<h2>${mod.name}</h2><ul>`;
+      modulesBody += `<h2>${escapeHtml(mod.name)}</h2><ul>`;
       const items = await fetchAllPages(api(`modules/${mod.id}/items?per_page=100`));
       // Kept for the schema-2 manifest (module order and membership). Stored in a
       // side map, not on `mod`: in Firefox the parsed API objects are Xray-wrapped
@@ -1134,8 +1129,8 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       moduleItemsById.set(String(mod.id), items);
 
       for (const item of items) {
-        const label = item.html_url ? `<a href="${item.html_url}">${item.title}</a>` : item.title;
-        modulesBody += `<li>${label} (${item.type})</li>`;
+        const label = item.html_url ? `<a href="${escapeHtml(item.html_url)}">${escapeHtml(item.title)}</a>` : escapeHtml(item.title);
+        modulesBody += `<li>${label} (${escapeHtml(item.type)})</li>`;
 
         // Track module-item → underlying-resource linkage for cross-ref rewriting.
         if (item.id) {
