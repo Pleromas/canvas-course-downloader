@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import __version__
 from .changes import _change_for
+from . import ingest as ingest_mod
 from .ingest import ingest_zip
 from .manifest import ManifestError
 from .materialize import materialize_run
@@ -51,6 +52,7 @@ def _ingest_paths(store: Store, paths, delete: bool, notify: bool) -> int:
 
 
 def cmd_ingest(store: Store, a) -> int:
+    ingest_mod.RENDER_AFTER_INGEST = not a.no_render
     return _ingest_paths(store, a.paths, a.delete, a.notify)
 
 
@@ -59,6 +61,7 @@ def cmd_ingest_all(store: Store, a) -> int:
     if not d.is_dir():
         print(f"{d}: not a directory")
         return 2
+    ingest_mod.RENDER_AFTER_INGEST = not a.no_render
     return _ingest_paths(store, sorted(d.glob("*.zip")), a.delete, a.notify)
 
 
@@ -153,6 +156,39 @@ def cmd_gc(store: Store, a) -> int:
     return 0
 
 
+def cmd_render(store: Store, a) -> int:
+    from .render import RenderOptions, load_options, render_run
+    cid = _course_id(store, a.course)
+    if a.run:
+        run = store.db.execute("select id from runs where course_id=? and id=?", (cid, int(a.run))).fetchone()
+    else:
+        run = store.db.execute("select id from runs where course_id=? order by id desc limit 1", (cid,)).fetchone()
+    if run is None:
+        print("no such run")
+        return 2
+    opts = load_options(store)
+    if a.all_pages:
+        opts.all_pages = True
+    if a.md_only:
+        opts.book = False
+    if a.book_only:
+        opts.md = False
+    r = render_run(store, run["id"], opts)
+    if r.md_dir:
+        print(f"md:   {r.md_dir}")
+    if r.book_path:
+        print(f"book: {r.book_path}")
+    for w in r.warnings:
+        print(f"note: {w}")
+    return 0
+
+
+def cmd_doctor(store: Store, a) -> int:
+    from .render import pdftools
+    print(pdftools.detect().summary())
+    return 0
+
+
 def cmd_install_units(store: Store, a) -> int:
     src = Path(__file__).resolve().parent.parent / "systemd"
     dest = Path.home() / ".config" / "systemd" / "user"
@@ -177,13 +213,25 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("paths", nargs="+")
     s.add_argument("--delete", action="store_true", help="delete ZIP after ingest instead of moving to processed/")
     s.add_argument("--notify", action="store_true", help="desktop notification via notify-send")
+    s.add_argument("--no-render", action="store_true", help="skip Markdown/book rendering after ingest")
     s.set_defaults(fn=cmd_ingest)
 
     s = sub.add_parser("ingest-all", help="ingest every ZIP in a directory")
     s.add_argument("dir", nargs="?", default=str(DEFAULT_INBOX))
     s.add_argument("--delete", action="store_true")
     s.add_argument("--notify", action="store_true")
+    s.add_argument("--no-render", action="store_true")
     s.set_defaults(fn=cmd_ingest_all)
+
+    s = sub.add_parser("render", help="build the Markdown tree and PDF book for a run")
+    s.add_argument("course")
+    s.add_argument("--run", help="run id (default: latest)")
+    s.add_argument("--all-pages", action="store_true", help="render every PDF page to PNG, not only figure pages")
+    s.add_argument("--md-only", action="store_true")
+    s.add_argument("--book-only", action="store_true")
+    s.set_defaults(fn=cmd_render)
+
+    sub.add_parser("doctor", help="show which optional render tools are installed").set_defaults(fn=cmd_doctor)
 
     s = sub.add_parser("status", help="courses, runs, pending ZIPs")
     s.add_argument("--inbox", default=str(DEFAULT_INBOX))

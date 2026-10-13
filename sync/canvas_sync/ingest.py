@@ -67,6 +67,9 @@ def _notify(summary: str) -> None:
 
 # Hook filled in by later tasks (report rendering, latest/ rebuild). Kept as a
 # module attribute so ingest stays testable before those modules exist.
+RENDER_AFTER_INGEST = True  # flipped off by `canvas-sync ingest --no-render`
+
+
 def _after_commit(store: Store, run_id: int, warnings: list[str]) -> tuple[Path | None, str]:
     from .changes import compute_changes
     from .report import one_line, write_report
@@ -74,7 +77,19 @@ def _after_commit(store: Store, run_id: int, warnings: list[str]) -> tuple[Path 
     cs = compute_changes(store, run_id)
     path = write_report(store, cs)
     rebuild_latest(store, cs.course_id)
-    return path, one_line(cs)
+    summary = one_line(cs)
+    if RENDER_AFTER_INGEST:
+        try:
+            from .render import render_run
+            r = render_run(store, run_id)
+            if r.md_dir:
+                summary += f"\n  md: {r.md_dir}"
+            if r.book_path:
+                summary += f"\n  book: {r.book_path}"
+            warnings.extend(r.warnings)
+        except Exception as e:  # rendering is best-effort; the ingest already succeeded
+            warnings.append(f"render failed: {type(e).__name__}: {e}")
+    return path, summary
 
 
 def ingest_zip(store: Store, zip_path: Path, keep: bool = True, notify: bool = False) -> IngestResult:
