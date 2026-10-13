@@ -1132,6 +1132,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
 
   // --- Modules ---------------------------------------------------------------
   let modules = [];
+  const moduleItemsById = new Map();
   if (types.modules) {
     log("Fetching modules...");
     modules = await fetchAllPages(api("modules?per_page=100"));
@@ -1140,7 +1141,11 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
     for (const mod of modules) {
       modulesBody += `<h2>${mod.name}</h2><ul>`;
       const items = await fetchAllPages(api(`modules/${mod.id}/items?per_page=100`));
-      mod.items = items; // kept for the schema-2 manifest (module order and membership)
+      // Kept for the schema-2 manifest (module order and membership). Stored in a
+      // side map, not on `mod`: in Firefox the parsed API objects are Xray-wrapped
+      // and assigning a content-script array onto them throws "Not allowed to
+      // define cross-origin object as property".
+      moduleItemsById.set(String(mod.id), items);
 
       for (const item of items) {
         const label = item.html_url ? `<a href="${item.html_url}">${item.title}</a>` : item.title;
@@ -1739,7 +1744,10 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
   // Built last so every path is final (truncated, de-duplicated, rewritten).
   // `items` is what the canvas-sync pipeline keys versions on; `counts` stays
   // for older consumers.
-  const manifestItems = buildManifestItems(filesToDownload, modules);
+  const manifestItems = buildManifestItems(
+    filesToDownload,
+    modules.map((m) => ({ id: m.id, name: m.name, position: m.position, items: moduleItemsById.get(String(m.id)) || [] }))
+  );
   const manifest = {
     schema: 2,
     course: { id: String(courseId), name: courseName, domain },
