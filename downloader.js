@@ -113,7 +113,8 @@ function renderQuizQuestions(questions) {
   let html = "<h3>Questions &amp; answer key</h3>";
   questions.forEach((q, i) => {
     html += `<div class="quiz-question"><p><strong>Q${i + 1}.</strong> (${fmtPoints(q.points_possible)} pts) ${cleanCanvasHtml(q.question_text || "")}</p>`;
-    const answers = q.answers || [];
+    // Sorted: Canvas shuffles answer order per view (see sortByText).
+    const answers = sortByText(q.answers || [], (a) => a.text || a.html || "");
     if (answers.length) {
       html += "<ul>";
       for (const ans of answers) {
@@ -139,7 +140,7 @@ function renderOwnQuizAnswers(questions) {
   let html = "<h3>Your answers</h3>";
   questions.forEach((q, i) => {
     html += `<div class="quiz-question"><p><strong>Q${i + 1}.</strong> ${cleanCanvasHtml(q.question_text || "")}</p>`;
-    const answers = (q.answers || []).filter((a) => a.id != null);
+    const answers = sortByText((q.answers || []).filter((a) => a.id != null), (a) => a.text || a.html || "");
     if (answers.length) {
       html += "<ul>";
       for (const ans of answers) {
@@ -184,9 +185,9 @@ async function fetchQuizReviewViaHtml(quiz) {
       const pts = ptsEl ? ` · ${escapeHtml(ptsEl.textContent.trim())}` : "";
       const qText = qTextEl ? cleanCanvasHtml(qTextEl.innerHTML) : "";
       html += `<div class="quiz-question"><p><strong>Q${i + 1}${pts}.</strong> ${qText}</p>`;
-      const answerDivs = q.querySelectorAll(".answer");
+      const answerDivs = sortByText(q.querySelectorAll(".answer"), (ans) => ans.textContent.replace(/\s+/g, " ").trim());
       if (answerDivs.length) {
-        const showsCorrectness = Array.from(answerDivs).some((ans) => ans.classList.contains("correct_answer"));
+        const showsCorrectness = answerDivs.some((ans) => ans.classList.contains("correct_answer"));
         html += "<ul>";
         answerDivs.forEach((ans) => {
           const isSelected = ans.classList.contains("selected_answer");

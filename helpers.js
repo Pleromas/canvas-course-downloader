@@ -643,3 +643,16 @@ function exportedItemTypes(types) {
   if (all.every((k) => t[k])) out.push("synthetic");
   return out;
 }
+
+/**
+ * Returns a new array sorted by the text `textOf` yields for each item, with
+ * a stable, locale-independent comparison. Canvas shuffles quiz answer order
+ * on every view, which made identical quizzes diff as "changed" between
+ * exports; rendering answers in sorted order makes the export deterministic.
+ */
+function sortByText(items, textOf) {
+  return Array.from(items)
+    .map((item, index) => ({ item, index, key: String(textOf(item) ?? "") }))
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.index - b.index))
+    .map((x) => x.item);
+}

@@ -71,7 +71,7 @@ Result so far: a full course export on Firefox goes from 100/172 failures → 0.
 
 ## Known issues / next fixes
 
-- ZIP mode on Firefox: **not yet verified** with the schema-2 manifest (2026-10-06). Export
+- ZIP mode on Firefox: **verified working 2026-10-12** (own zipwriter.js + Blob hand-off to the background). Earlier note: Export
   course 133044 once with ZIP mode on and folder prefix `CanvasExports`; if Firefox rejects
   the content-script `blob:` URL, apply Task 2b of
   `docs/superpowers/plans/2026-10-06-canvas-sync.md` (hand the Blob to the background).

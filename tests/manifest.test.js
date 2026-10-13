@@ -90,3 +90,12 @@ test("exportedItemTypes maps enabled content types to manifest item types", () =
   // files on, linkedFiles off still exports files
   assert.ok(exportedItemTypes({ ...all, linkedFiles: false }).includes("file"));
 });
+
+test("sortByText orders items by their text deterministically and stably", () => {
+  const sortByText = globalThis.sortByText;
+  const items = [{ t: "b" }, { t: "A" }, { t: "a" }, { t: "" }, { t: "b" }];
+  const out = sortByText(items, (x) => x.t);
+  assert.deepEqual(out.map((x) => x.t), ["", "A", "a", "b", "b"]);
+  assert.notEqual(out, items, "returns a new array");
+  assert.deepEqual(items.map((x) => x.t), ["b", "A", "a", "", "b"], "input untouched");
+});
