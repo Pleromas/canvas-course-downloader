@@ -130,14 +130,14 @@ function notifyCompletion() {
 // Blob URLs minted in this context (data: conversions, Firefox ZIP hand-off)
 // are released once the download has finished with them; a retry re-creates
 // them from `job.url` / the original data: URL as needed.
-function releaseBlobUrls(job) {
+function releaseBlobUrls(job, { keepRetryable = false } = {}) {
   if (typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") return;
-  for (const key of ["blobUrl"]) {
-    if (job[key] && job[key].startsWith("blob:")) {
-      try { URL.revokeObjectURL(job[key]); } catch { /* already gone */ }
-      job[key] = null;
-    }
-  }
+  if (!job.blobUrl || !job.blobUrl.startsWith("blob:")) return;
+  // A job whose only source is the blob: URL itself (Firefox ZIP hand-off)
+  // cannot be retried once revoked, so keep it after a failure.
+  if (keepRetryable && job.url === job.blobUrl) return;
+  try { URL.revokeObjectURL(job.blobUrl); } catch { /* already gone */ }
+  job.blobUrl = null;
 }
 
 chrome.downloads.onChanged.addListener(async (delta) => {
@@ -156,7 +156,7 @@ chrome.downloads.onChanged.addListener(async (delta) => {
     job.state = STATE.FAILED;
     job.error = delta.error?.current || "Download interrupted";
     chromeIdToJob.delete(delta.id);
-    releaseBlobUrls(job);
+    releaseBlobUrls(job, { keepRetryable: true });
     await persistState();
     broadcastStatus();
     scheduleNext();
@@ -282,21 +282,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sourceTabId = sender.tab?.id || sourceTabId;
 
       const prefix = downloadSettings.folderPrefix ? `${downloadSettings.folderPrefix}/` : "";
-      const newJobs = files.map((file) => ({
-        id: nextJobId++,
+      const newJobs = files.map((file) => {
         // Firefox content scripts send the ZIP as a Blob (see downloadAsZip):
         // mint the blob: URL here, in the background's own context, which
         // downloads.download() accepts. Only the string is persisted.
-        url: file.url || (file.blob && typeof URL !== "undefined" && typeof URL.createObjectURL === "function"
-          ? URL.createObjectURL(file.blob) : ""),
-        filename: file.filename,
-        path: `${prefix}${safeName}/${file.path}`.replace(/\/+/g, "/"),
-        state: STATE.QUEUED,
-        chromeDownloadId: null,
-        error: null,
-        // Per-file override (generated docs always overwrite); null = batch setting.
-        conflictAction: file.conflictAction || null,
-      }));
+        let url = file.url || "";
+        let blobUrl = null;
+        if (!url && file.blob && typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+          url = URL.createObjectURL(file.blob);
+          blobUrl = url;
+        }
+        return {
+          id: nextJobId++,
+          url,
+          filename: file.filename,
+          path: `${prefix}${safeName}/${file.path}`.replace(/\/+/g, "/"),
+          state: STATE.QUEUED,
+          chromeDownloadId: null,
+          error: null,
+          // Per-file override (generated docs always overwrite); null = batch setting.
+          conflictAction: file.conflictAction || null,
+          blobUrl,
+        };
+      });
 
       jobs.push(...newJobs);
       await persistState();
