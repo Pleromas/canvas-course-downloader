@@ -43,7 +43,7 @@ hr { border: 0; border-top: 1px solid #e5e7eb; margin: 10pt 0; }
 a { color: #1d4ed8; text-decoration: none; }
 .part { page-break-before: always; }
 .mark { color: #ffffff; font-size: 2pt; line-height: 2pt; margin: 0; }
-.cover { page-break-after: always; display: flex; flex-direction: column; justify-content: center; min-height: 230mm; }
+.cover { display: flex; flex-direction: column; justify-content: center; height: 200mm; }
 .cover h1 { font-size: 34pt; margin-bottom: 6pt; }
 .cover .sub { font-size: 13pt; color: #4b5563; }
 .meta { color: #6b7280; font-size: 9.5pt; margin-bottom: 8pt; }
@@ -226,13 +226,22 @@ def _parts(store: Store, run_id: int, md_dir: Path):
         elif entry and entry.get("file"):
             parts.append(("file", it, None, entry["file"], module_title))
 
-    for node in build_tree(snap):
+    from .md_out import attachments_for
+
+    def add_tree(node, module_title):
+        if (node.item.get("path") or "").lower() == "modules.html":
+            return  # the printed contents page replaces the module index
+        add(node, module_title)
+        for c in node.children:
+            add_tree(c, module_title)
+
+    for node in build_tree(snap, attachments_for(store, snap)):
         if node.kind in ("module", "group"):
             parts.append(("section", node.item, None, None, None))
             for c in node.children:
-                add(c, node.item["title"])
+                add_tree(c, node.item["title"])
         else:
-            add(node, None)
+            add_tree(node, None)
     return snap, parts
 
 

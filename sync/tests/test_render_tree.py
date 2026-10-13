@@ -60,3 +60,21 @@ class TreeTests(unittest.TestCase):
         keys = [i["key"] for i in flatten(build_tree(SNAP))]
         self.assertNotIn("styles.css", keys)
         self.assertEqual(keys, ["q0", "f0", "a1", "88", "a2", "n1", "f1", "grades.csv"])
+
+
+class AttachmentTests(unittest.TestCase):
+    def test_files_linked_from_a_doc_follow_it_and_leave_the_files_group(self):
+        from canvas_sync.render.tree import build_tree, flatten
+        attachments = {("assignment", "a1"): [item("file", "f1", "Extracted_Files/extra.pdf", "extra.pdf")]}
+        tree = build_tree(SNAP, attachments)
+        week1 = [n for n in tree if n.kind == "module"][1]
+        a1 = week1.children[0]
+        self.assertEqual([c.item["key"] for c in a1.children], ["f1"])
+        groups = {g.item["title"]: g for g in tree if g.kind == "group"}
+        self.assertNotIn("Files", groups)
+        self.assertEqual([i["key"] for i in flatten(tree)], ["q0", "f0", "a1", "f1", "88", "a2", "n1", "grades.csv"])
+
+    def test_syllabus_comes_first(self):
+        from canvas_sync.render.tree import build_tree, flatten
+        snap = {"items": SNAP["items"] + [item("synthetic", "syllabus.html", "Syllabus.html", "Syllabus")]}
+        self.assertEqual(flatten(build_tree(snap))[0]["key"], "syllabus.html")

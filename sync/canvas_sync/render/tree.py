@@ -35,12 +35,30 @@ def _index(items):
     return by_key, by_slug
 
 
-def build_tree(snapshot: dict) -> list[Node]:
+def build_tree(snapshot: dict, attachments: dict[tuple[str, str], list[dict]] | None = None) -> list[Node]:
+    """`attachments` maps (type, key) of a document to the file items it links;
+    those files are nested under the document and leave the Files group."""
     items = [i for i in snapshot.get("items", [])
              if not (i["type"] == "synthetic" and str(i["key"]).lower() in EXCLUDED_SYNTHETIC)]
+    attachments = attachments or {}
     by_key, by_slug = _index(items)
     placed: set[tuple[str, str]] = set()
     nodes: list[Node] = []
+
+    def leaf(it: dict) -> Node:
+        node = Node(it)
+        placed.add((it["type"], str(it["key"])))
+        for f in attachments.get((it["type"], str(it["key"])), []):
+            fk = (f["type"], str(f["key"]))
+            if fk not in placed:
+                placed.add(fk)
+                node.children.append(Node(f))
+        return node
+
+    # Syllabus first: it is the course's front matter.
+    for it in items:
+        if it["type"] == "synthetic" and str(it.get("path") or "").lower() == "syllabus.html":
+            nodes.append(leaf(it))
 
     modules = sorted((i for i in items if i["type"] == "module"),
                      key=lambda m: ((m.get("meta") or {}).get("position") or 0, m["title"]))
@@ -54,9 +72,10 @@ def build_tree(snapshot: dict) -> list[Node]:
                 target = by_slug.get(str(cid)) or by_key.get(("page", str(cid)))
             elif t and cid is not None:
                 target = by_key.get((t, str(cid)))
-            if target is not None:
+            if target is not None and (target["type"], str(target["key"])) not in placed:
+                node.children.append(leaf(target))
+            elif target is not None:
                 node.children.append(Node(target))
-                placed.add((target["type"], str(target["key"])))
             else:
                 node.children.append(Node({"type": "external", "key": str(mi.get("id")),
                                            "path": None, "title": mi.get("title") or "",
@@ -67,8 +86,12 @@ def build_tree(snapshot: dict) -> list[Node]:
         rest = [i for i in items if i["type"] == type_ and (type_, str(i["key"])) not in placed]
         if rest:
             rest.sort(key=lambda i: (i.get("title") or "", str(i["key"])))
-            nodes.append(Node({"type": "group", "key": type_, "path": None, "title": title, "meta": {}},
-                              [Node(i) for i in rest], kind="group"))
+            group = Node({"type": "group", "key": type_, "path": None, "title": title, "meta": {}}, kind="group")
+            for i in rest:
+                if (type_, str(i["key"])) not in placed:
+                    group.children.append(leaf(i))
+            if group.children:
+                nodes.append(group)
     return nodes
 
 

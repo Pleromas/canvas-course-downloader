@@ -225,6 +225,13 @@ def _grades_md(csv_text: str) -> str:
     return "\n".join(lines)
 
 
+def _item_lines(node: Node, plan: dict, depth: int = 0) -> list[str]:
+    lines = [("  " * depth) + _item_line(node.item, plan)]
+    for c in node.children:
+        lines.extend(_item_lines(c, plan, depth + 1))
+    return lines
+
+
 def _item_line(it: dict, plan: dict, link_from: str = "") -> str:
     meta = it.get("meta") or {}
     p = it.get("path")
@@ -246,6 +253,41 @@ def _item_line(it: dict, plan: dict, link_from: str = "") -> str:
     return f"- {label} — {tail}"
 
 
+_HREF_RE = re.compile(r"""(?:href|src)=["']([^"']+)["']""", re.I)
+
+
+def attachments_for(store: Store, snap: dict) -> dict[tuple[str, str], list[dict]]:
+    """Files each exported document links to (by href/src), resolved through the
+    export's relative paths. Used to nest lecture PDFs under the topic that links
+    them in both the Markdown index and the book."""
+    files = snap["files"]
+    by_path = {i["path"]: i for i in snap["items"] if i.get("path")}
+    out: dict[tuple[str, str], list[dict]] = {}
+    for it in snap["items"]:
+        p = it.get("path")
+        if not p or not p.lower().endswith((".html", ".htm")) or p not in files or it["type"] in ("synthetic",):
+            continue
+        try:
+            raw = store.read_blob(files[p]).decode("utf-8", "replace")
+        except OSError:
+            continue
+        seen = set()
+        for href in _HREF_RE.findall(raw):
+            if re.match(r"^[a-z][a-z0-9+.-]*:", href, re.I) or href.startswith("#"):
+                continue
+            for clean in (unquote(href), unquote(urlsplit(href).path)):
+                target = posixpath.normpath(posixpath.join(posixpath.dirname(p), clean))
+                f = by_path.get(target)
+                if f and f["type"] in ("file", "media") and f["key"] not in seen:
+                    ext = posixpath.splitext(target)[1].lower()
+                    if ext in IMAGE_EXT:
+                        break  # inline images stay inline, not attachments
+                    seen.add(f["key"])
+                    out.setdefault((it["type"], str(it["key"])), []).append(f)
+                    break
+    return out
+
+
 def render_markdown(store: Store, run_id: int, caps: Capabilities, all_pages: bool = False) -> Path:
     row = store.db.execute("select snapshot_path, exported_at, course_id from runs where id=?", (run_id,)).fetchone()
     if row is None or not row["snapshot_path"]:
@@ -258,7 +300,7 @@ def render_markdown(store: Store, run_id: int, caps: Capabilities, all_pages: bo
     out = store.root / "md" / course_dir / f"{run_stamp(snap['exported_at'])}_run{run_id}"
     out.mkdir(parents=True, exist_ok=True)
 
-    tree = build_tree(snap)
+    tree = build_tree(snap, attachments_for(store, snap))
     ordered = flatten(tree)
     plan = _plan_paths(items)
     by_path = {i["path"]: i for i in items if i.get("path")}
@@ -338,16 +380,21 @@ def render_markdown(store: Store, run_id: int, caps: Capabilities, all_pages: bo
     idx = [f"# {course['name']}\n", f"Exported {snap['exported_at'][:16].replace('T', ' ')} (run {run_id}). "
            f"Source: {course['domain']}/courses/{course['id']}\n"]
     modules = [n for n in tree if n.kind == "module"]
+    front = [n for n in tree if n.kind == "item"]
+    if front:
+        idx.append("")
+        for n in front:
+            idx.extend(_item_lines(n, plan))
     if modules:
         idx.append("\n## Modules\n")
         for m in modules:
             idx.append(f"\n### {m.item['title']}\n")
             for c in m.children:
-                idx.append(_item_line(c.item, plan))
+                idx.extend(_item_lines(c, plan))
     for g in (n for n in tree if n.kind == "group"):
         idx.append(f"\n## {g.item['title']}" + (" (not in a module)" if modules else "") + "\n")
         for c in g.children:
-            idx.append(_item_line(c.item, plan))
+            idx.extend(_item_lines(c, plan))
     (out / "index.md").write_text("\n".join(idx).rstrip() + "\n")
 
     # _full.md: everything in reading order, links rebased to the tree root.
