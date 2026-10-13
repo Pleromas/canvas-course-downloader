@@ -42,7 +42,11 @@ first, then extend it (see Roadmap).
   `~/CanvasArchive/` (sha256 blobs + SQLite + per-run snapshot), writes a Markdown change
   report, rebuilds `latest/<course>/`, notifies via `notify-send`. systemd user path unit
   watches `~/Downloads/CanvasExports/`. Tests: `cd sync && python -m unittest discover -s tests`.
-  Spec: `docs/superpowers/specs/2026-10-06-canvas-sync-design.md`. Settings presets: Full Archive etc.;
+  Spec: `docs/superpowers/specs/2026-10-06-canvas-sync-design.md`.
+- `sync/canvas_sync/render/` — stage 2: Markdown tree for LLMs (`md_out.py`, own HTML to
+  Markdown converter `htmlmd.py`) and PDF book (`book.py`: Chromium print + pypdf splice).
+  Optional tools detected in `pdftools.py`; `canvas-sync doctor` lists them. Runs after each
+  ingest. Spec: `docs/superpowers/specs/2026-10-13-render-design.md`. Settings presets: Full Archive etc.;
   Incremental mode skips already-downloaded items; filters can exclude videos.
 - All network requests go only to the Canvas origin the page is on. Nothing is ever
   POSTed to Canvas; the extension is read-only against the account.

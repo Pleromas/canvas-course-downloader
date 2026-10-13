@@ -303,6 +303,18 @@ ZIP exports into a content-addressed archive and reports what changed between ex
     canvas-sync install-units        # watch ~/Downloads/CanvasExports (systemd --user)
     canvas-sync status | log <course> | diff <course> type:id runA runB | checkout <course> run dir | verify | gc
 
+After every ingest the run is also rendered:
+
+- `~/CanvasArchive/md/<course>/latest/` — a Markdown tree for language models: `index.md`
+  (course map in module order), one `.md` per item with frontmatter, images inline, lecture
+  PDFs as per-page text with figure pages rendered to PNG, and `_full.md` (everything in one
+  file for a single upload).
+- `~/CanvasArchive/books/<course>/latest.pdf` — a PDF book: cover, contents, course content in
+  module order with the original lecture PDFs spliced in, outline for navigation.
+
+    canvas-sync render <course> [--run N] [--all-pages] [--md-only|--book-only]
+    canvas-sync doctor     # which optional tools are present (poppler, Chromium, pypdf)
+
 Set the extension to ZIP mode with folder prefix `CanvasExports`. Each export produces one
 report under `~/CanvasArchive/reports/<courseId>/` and a browsable tree under
 `~/CanvasArchive/latest/<course>/`. That tree (and any `checkout`) is a read-only view made
