@@ -229,6 +229,20 @@ async function fetchQuizReviewViaHtml(quiz) {
 // so the threshold is conservative.
 const ZIP_MAX_TOTAL_BYTES = 1.5 * 1024 * 1024 * 1024;
 
+/** Wraps a ReadableStream as an async iterator of Uint8Array chunks. */
+async function* streamChunks(stream) {
+  const reader = stream.getReader();
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      yield value instanceof Uint8Array ? value : new Uint8Array(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function downloadAsZip(files, courseName, settings, log) {
   const safeName = sanitizeFilename(courseName);
   const totalFiles = files.length;
@@ -273,7 +287,13 @@ async function downloadAsZip(files, courseName, settings, log) {
         } else {
           const res = await fetch(file.url, { signal: abortController.signal });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          input = res.body;
+          // Hand client-zip an async iterator rather than the raw ReadableStream.
+          // Firefox gives content scripts cross-realm stream objects that fail
+          // client-zip's `instanceof ReadableStream` check ("Unsupported input
+          // format"), which used to abort the whole archive and fall back to
+          // loose per-file downloads. An iterator of Uint8Array chunks passes the
+          // duck-typed `Symbol.asyncIterator` check on both browsers.
+          input = streamChunks(res.body);
         }
         completed++;
         yield {
@@ -1819,7 +1839,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
         // ceiling and still blow the in-memory archive. Nothing was saved
         // yet, so hand the same list to the per-file downloader instead.
         log(`ZIP bundling failed (${err && err.message ? err.message : err}) — falling back to individual file downloads.`);
-        showToast("ZIP bundling failed for this course. Files will download individually instead.", "info");
+        showToast(`ZIP bundling failed (${err && err.message ? err.message : err}). Files will download individually instead.`, "error");
       }
       if (result) {
         if (!result.cancelled) saveIncrementalRecord(result.failedKeys);
