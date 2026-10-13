@@ -14,7 +14,7 @@ let nextJobId = 0;
 let isProcessing = false;
 let cancelled = false;
 let sourceTabId = null;
-let downloadSettings = { conflictAction: "overwrite", throttleMs: 250, folderPrefix: "" };
+let downloadSettings = { conflictAction: "overwrite", throttleMs: 250, folderPrefix: "CanvasExports" };
 
 // Maps Chrome download IDs → job objects for onChanged tracking
 const chromeIdToJob = new Map();
@@ -38,7 +38,7 @@ function ensureStateLoaded() {
       isProcessing: false,
       cancelled: false,
       sourceTabId: null,
-      downloadSettings: { conflictAction: "overwrite", throttleMs: 250, folderPrefix: "" },
+      downloadSettings: { conflictAction: "overwrite", throttleMs: 250, folderPrefix: "CanvasExports" },
     }).then((s) => {
       jobs = s.jobs;
       nextJobId = s.nextJobId;

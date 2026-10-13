@@ -20,7 +20,7 @@ const DEFAULTS = {
   },
   conflictAction: "overwrite",
   throttleMs: 250,
-  folderPrefix: "",
+  folderPrefix: "CanvasExports",
   zipMode: true,
   incrementalMode: false,
   excludeVideos: false,
