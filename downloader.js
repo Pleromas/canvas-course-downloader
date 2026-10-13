@@ -271,6 +271,13 @@ async function downloadAsZip(files, courseName, settings, log) {
           ? await fetch(file.url)
           : await fetch(file.url, { signal: abortController.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        // An expired Canvas session answers file URLs with the login page and
+        // HTTP 200. Refuse HTML for anything that is not itself an HTML export.
+        const ctype = (res.headers.get("content-type") || "").toLowerCase();
+        const expectsHtml = file.url.startsWith("data:") || /\.html?$/i.test(file.filename) || (file.contentType || "").startsWith("text/html");
+        if (!expectsHtml && ctype.startsWith("text/html")) {
+          throw new Error("got an HTML page instead of the file (Canvas session expired? sign in again)");
+        }
         writer.add(fullPath, new Uint8Array(await res.arrayBuffer()), now);
         completed++;
       } catch (err) {
@@ -330,7 +337,9 @@ async function downloadAsZip(files, courseName, settings, log) {
     );
   });
 
-  if (url) setTimeout(() => URL.revokeObjectURL(url), 60000);
+  // Chrome path only (Firefox hands the Blob over). The queue may be busy with
+  // an earlier batch, so give the download a generous window to start.
+  if (url) setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000);
 
   updateDownloadPanel({
     total: totalFiles, completed, failed, queued: 0, downloading: 0,
@@ -376,10 +385,16 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
     try {
       const perm = await chrome.runtime.sendMessage({ type: "ENSURE_CDN_PERMISSION" });
       if (!perm?.granted) {
-        showToast(
-          "Some submitted files may be skipped. Allow access to canvas-user-content.com in Settings to include them.",
-          "info"
-        );
+        // Firefox cannot show the permission prompt from a background message
+        // (no user-input context), so this would nag on every export; once a day.
+        const { cdnHintShownAt = 0 } = await new Promise((r) => chrome.storage.local.get({ cdnHintShownAt: 0 }, r));
+        if (Date.now() - cdnHintShownAt > 24 * 60 * 60 * 1000) {
+          chrome.storage.local.set({ cdnHintShownAt: Date.now() });
+          showToast(
+            "Some submitted files may be skipped. Allow access to canvas-user-content.com in Settings to include them.",
+            "info"
+          );
+        }
       }
     } catch (err) {
       console.warn("[Canvas Vault] CDN permission check failed:", err);
@@ -1854,6 +1869,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
           // messages and refuses functions (Chrome would silently drop it).
           files: filesToDownload.map((f) => { const { finalize, ...rest } = f; return rest; }),
           courseName,
+          courseId: String(courseId),
           conflictAction: settings.conflictAction,
           throttleMs: settings.throttleMs,
           folderPrefix: settings.folderPrefix,

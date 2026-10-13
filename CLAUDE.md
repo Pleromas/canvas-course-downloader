@@ -71,21 +71,21 @@ Result so far: a full course export on Firefox goes from 100/172 failures → 0.
 
 ## Known issues / next fixes
 
-- ZIP mode on Firefox: **verified working 2026-10-12** (own zipwriter.js + Blob hand-off to the background). Earlier note: Export
-  course 133044 once with ZIP mode on and folder prefix `CanvasExports`; if Firefox rejects
-  the content-script `blob:` URL, apply Task 2b of
-  `docs/superpowers/plans/2026-10-06-canvas-sync.md` (hand the Blob to the background).
-
-- Sanitizer is applied only to the filename, not to each `path` segment. A module or
-  folder name with trailing whitespace or U+202F will still fail. Apply the same
-  sanitization per path component (split on `/`, sanitize, rejoin).
-- Revoke blob URLs after download completes/fails to avoid leaking memory on big runs.
-- `git pull` from upstream will conflict with changes 1–3; keep them in a branch
-  (`firefox-support`) and rebase.
+- Fixed 2026-10-12 (branch `canvas-sync`): per-segment path sanitising (`sanitize.js`),
+  queue reconcile after background restart, incremental inventory pruned on per-file
+  failures, Canvas rate-limit 403 retried, HTML-instead-of-file detection in ZIP mode,
+  HTML escaping at injection sites, CDN permission toast throttled to once a day.
+- Media CDN (Kaltura) CORS in ZIP mode is unverified: `/media_attachments/<id>/redirect`
+  302s to another origin and the content-script fetch may be blocked. Per-file mode is
+  unaffected. Check with a course that has an embedded lecture recording.
 - Panopto-hosted lecture videos and other LTI/external-tool content are not reachable
   via the Canvas API and are not exported.
 - Files linked from *other* courses the user can't access show up in
   `_inaccessible_links.csv` with HTTP 403 — expected, not a bug.
+- Signed Firefox build: unlisted on AMO under the owner's account, id
+  `canvas-course-downloader@pleromas`. New build = bump `version` in `manifest.json`,
+  `npx web-ext@8 build`, upload `web-ext-artifacts/*.zip` as a new version, install the
+  signed xpi from the version page.
 
 ## Conventions
 

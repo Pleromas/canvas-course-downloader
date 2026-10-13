@@ -57,9 +57,47 @@ function ensureStateLoaded() {
       for (const j of jobs) {
         if (j.chromeDownloadId != null) chromeIdToJob.set(j.chromeDownloadId, j);
       }
-    });
+    }).then(reconcileAfterRestart);
   }
   return stateLoadPromise;
+}
+
+/**
+ * The worker can die between marking a job DOWNLOADING and the download
+ * finishing. Its onChanged event is then never seen and the queue would wait
+ * forever with isProcessing stuck on. Ask the downloads API what actually
+ * happened to every in-flight job and resume the queue.
+ */
+async function reconcileAfterRestart() {
+  const inFlight = jobs.filter((j) => j.state === STATE.DOWNLOADING);
+  if (inFlight.length === 0) {
+    if (isProcessing && !jobs.some((j) => j.state === STATE.QUEUED)) isProcessing = false;
+    if (!isProcessing && jobs.some((j) => j.state === STATE.QUEUED) && !cancelled) scheduleNext();
+    return;
+  }
+  for (const job of inFlight) {
+    if (job.chromeDownloadId == null) {
+      job.state = STATE.QUEUED; // never reached downloads.download(); run it again
+      continue;
+    }
+    let items = [];
+    try { items = await chrome.downloads.search({ id: job.chromeDownloadId }); } catch { items = []; }
+    const d = items[0];
+    if (!d || d.state === "interrupted") {
+      job.state = STATE.FAILED;
+      job.error = d?.error || "Download lost while the extension was restarted";
+      chromeIdToJob.delete(job.chromeDownloadId);
+    } else if (d.state === "complete") {
+      job.state = STATE.COMPLETE;
+      chromeIdToJob.delete(job.chromeDownloadId);
+      releaseBlobUrls(job);
+    }
+    // in_progress: the onChanged listener is attached again; leave it.
+  }
+  isProcessing = jobs.some((j) => j.state === STATE.DOWNLOADING);
+  await persistState();
+  broadcastStatus();
+  if (!isProcessing && !cancelled && jobs.some((j) => j.state === STATE.QUEUED)) scheduleNext();
 }
 
 function persistState() {
@@ -90,7 +128,7 @@ function getStatus() {
     currentFile: jobs.find((j) => j.state === STATE.DOWNLOADING)?.filename || null,
     failedFiles: jobs
       .filter((j) => j.state === STATE.FAILED)
-      .map((j) => ({ id: j.id, filename: j.filename, path: j.path, error: j.error })),
+      .map((j) => ({ id: j.id, filename: j.filename, path: j.path, relPath: j.relPath, courseId: j.courseId, error: j.error })),
     done: jobs.length > 0 && queued === 0 && downloading === 0,
     cancelled,
   };
@@ -262,7 +300,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     await ensureStateLoaded();
 
     if (message.type === "START_DOWNLOAD") {
-      const { files, courseName, conflictAction, throttleMs, folderPrefix } = message.payload;
+      const { files, courseName, conflictAction, throttleMs, folderPrefix, courseId } = message.payload;
       const safeName = courseName.replace(/[/\\?%*:|"<>]/g, "-");
 
       // Store settings for this batch
@@ -299,6 +337,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           url,
           filename: file.filename,
           path: `${prefix}${safeName}/${file.path}`.replace(/\/+/g, "/"),
+          // Relative path + course let the content script fix up its incremental
+          // inventory when this job fails (see DOWNLOAD_STATUS handling).
+          relPath: file.path || "",
+          courseId: courseId || null,
           state: STATE.QUEUED,
           chromeDownloadId: null,
           error: null,

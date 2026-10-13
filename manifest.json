@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Canvas Vault",
   "description": "Archive your Canvas LMS courses: files, pages, assignments, quizzes, grades and more, exported as one ZIP per course for versioned, offline keeping.",
-  "version": "2.11.0",
+  "version": "2.12.0",
   "browser_specific_settings": {
     "gecko": {
       "id": "canvas-course-downloader@pleromas",

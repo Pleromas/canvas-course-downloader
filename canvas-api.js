@@ -20,7 +20,13 @@ async function fetchWithRetry(url, options = {}, retries = MAX_RETRIES) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetchWithTimeout(url, options);
-      if (res.ok || (res.status < 500 && res.status !== 429)) return res;
+      // Canvas throttles with 403 + "Rate Limit Exceeded" (not 429); treat it
+      // as transient like a 5xx. The header is cheaper than reading the body.
+      const rateLimited = res.status === 403 && (
+        res.headers.get("x-rate-limit-remaining") === "0" ||
+        /rate limit/i.test(await res.clone().text().catch(() => ""))
+      );
+      if (res.ok || (res.status < 500 && res.status !== 429 && !rateLimited)) return res;
       if (attempt === retries) return res;
       const delay = Math.min(1000 * 2 ** attempt, 8000);
       console.warn(`[Canvas Vault] ${res.status} on ${url}, retrying in ${delay}ms...`);
