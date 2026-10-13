@@ -1823,29 +1823,54 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
   // --- ZIP mode or individual download handoff --------------------------------
   log(`${filesToDownload.length} files ready.`);
 
-  if (settings.zipMode && typeof downloadZip !== "undefined") {
-    const estimatedBytes = filesToDownload.reduce((sum, f) => sum + (f.size || 0), 0);
-    if (estimatedBytes > ZIP_MAX_TOTAL_BYTES) {
-      const gb = (estimatedBytes / (1024 * 1024 * 1024)).toFixed(1);
-      log(`Estimated archive size ~${gb} GB exceeds the bundling ceiling — falling back to individual file downloads.`);
-      showToast(`Course is too large for ZIP bundling (~${gb} GB). Files will download individually.`, "info");
+  // Why ZIP mode did not produce an archive, when it was requested. Written
+  // into the per-file fallback as `_zip_fallback.txt` so the reason survives
+  // even when nobody is watching the console.
+  let zipFallbackReason = "";
+  if (settings.zipMode) {
+    if (typeof downloadZip === "undefined") {
+      zipFallbackReason = "client-zip did not load: `downloadZip` is undefined in the content script.";
     } else {
-      let result = null;
-      try {
-        result = await downloadAsZip(filesToDownload, courseName, settings, log);
-      } catch (err) {
-        // The estimate only counts files whose size Canvas reported, so a
-        // course with a few unsized lecture recordings can slip under the
-        // ceiling and still blow the in-memory archive. Nothing was saved
-        // yet, so hand the same list to the per-file downloader instead.
-        log(`ZIP bundling failed (${err && err.message ? err.message : err}) — falling back to individual file downloads.`);
-        showToast(`ZIP bundling failed (${err && err.message ? err.message : err}). Files will download individually instead.`, "error");
-      }
-      if (result) {
-        if (!result.cancelled) saveIncrementalRecord(result.failedKeys);
-        return result;
+      const estimatedBytes = filesToDownload.reduce((sum, f) => sum + (f.size || 0), 0);
+      if (estimatedBytes > ZIP_MAX_TOTAL_BYTES) {
+        const gb = (estimatedBytes / (1024 * 1024 * 1024)).toFixed(1);
+        zipFallbackReason = `Estimated archive size ~${gb} GB exceeds the bundling ceiling.`;
+        showToast(`Course is too large for ZIP bundling (~${gb} GB). Files will download individually.`, "info");
+      } else {
+        let result = null;
+        try {
+          result = await downloadAsZip(filesToDownload, courseName, settings, log);
+        } catch (err) {
+          // The estimate only counts files whose size Canvas reported, so a
+          // course with a few unsized lecture recordings can slip under the
+          // ceiling and still blow the in-memory archive. Nothing was saved
+          // yet, so hand the same list to the per-file downloader instead.
+          zipFallbackReason = `${err && err.name ? err.name + ": " : ""}${err && err.message ? err.message : err}\n${err && err.stack ? err.stack : ""}`;
+          showToast(`ZIP bundling failed (${err && err.message ? err.message : err}). Files will download individually instead.`, "error");
+        }
+        if (result) {
+          if (!result.cancelled) saveIncrementalRecord(result.failedKeys);
+          return result;
+        }
+        if (!zipFallbackReason) zipFallbackReason = "downloadAsZip returned no result.";
       }
     }
+    log(`ZIP bundling skipped: ${zipFallbackReason.split("\n")[0]} — falling back to individual file downloads.`);
+    const diag = [
+      `Canvas Course Downloader ${chrome.runtime.getManifest().version}`,
+      `userAgent: ${navigator.userAgent}`,
+      `zipMode: ${settings.zipMode}, folderPrefix: ${JSON.stringify(settings.folderPrefix)}`,
+      `typeof downloadZip: ${typeof downloadZip}`,
+      `files: ${filesToDownload.length}`,
+      "",
+      zipFallbackReason,
+    ].join("\n");
+    filesToDownload.push({
+      url: `data:text/plain;charset=utf-8,${encodeURIComponent(diag)}`,
+      filename: "_zip_fallback.txt",
+      path: "",
+      conflictAction: "overwrite",
+    });
   }
 
   // Individual downloads stream to disk through chrome.downloads, which
