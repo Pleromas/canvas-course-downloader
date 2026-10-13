@@ -12,7 +12,9 @@ NOCAPS = Capabilities(None, None, None, None, False)
 
 class RenderRunTests(TempStore):
     def test_render_run_without_tools_gives_md_and_warnings(self):
-        with mock.patch.object(pdftools, "detect", return_value=NOCAPS):
+        from canvas_sync import ingest as ingest_mod
+        with mock.patch.object(pdftools, "detect", return_value=NOCAPS), \
+             mock.patch.object(ingest_mod, "RENDER_AFTER_INGEST", True):
             res = ingest_zip(self.store, make_zip(self.root / "in/a.zip", base_manifest(items=[A1]), {"Assignments/A1.html": b"<p>x</p>"}))
             self.assertIn("md:", res.summary)
             r = render_run(self.store, res.run_id, RenderOptions(md=True, book=True))

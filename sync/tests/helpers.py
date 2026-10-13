@@ -4,12 +4,20 @@ from canvas_sync.store import Store
 
 
 class TempStore(unittest.TestCase):
+    """Temp store per test. Rendering after ingest is switched off (it would run
+    Chromium for every ingest test); render tests enable it explicitly."""
+
     def setUp(self):
+        from canvas_sync import ingest as _ingest
+        self._render_flag = _ingest.RENDER_AFTER_INGEST
+        _ingest.RENDER_AFTER_INGEST = False
         self._tmp = tempfile.TemporaryDirectory()
         self.root = Path(self._tmp.name) / "archive"
         self.store = Store(self.root)
 
     def tearDown(self):
+        from canvas_sync import ingest as _ingest
+        _ingest.RENDER_AFTER_INGEST = self._render_flag
         self.store.close()
         self._tmp.cleanup()
 
@@ -50,8 +58,12 @@ def make_zip(dest, manifest, files):
     """Write a ZIP at `dest` containing manifest.json plus {path: bytes}."""
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    # Fixed entry timestamps so identical content gives identical bytes (and hash)
+    # regardless of when the test runs.
     with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("manifest.json", json.dumps(manifest))
+        def put(name, data):
+            zf.writestr(zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0)), data, zipfile.ZIP_DEFLATED)
+        put("manifest.json", json.dumps(manifest))
         for path, data in files.items():
-            zf.writestr(path, data)
+            put(path, data)
     return dest

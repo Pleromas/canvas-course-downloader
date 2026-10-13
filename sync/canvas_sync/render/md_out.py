@@ -18,7 +18,7 @@ from ..store import Store
 from . import pdftools
 from .htmlmd import html_to_markdown
 from .pdftools import Capabilities
-from .tree import Node, build_tree, flatten
+from .tree import EXCLUDED_SYNTHETIC, Node, build_tree, flatten
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
 LOW_TEXT_WORDS = 40
@@ -188,6 +188,8 @@ def _plan_paths(items: list[dict]) -> dict[str, dict]:
         if not p:
             continue
         low = p.lower()
+        if it["type"] == "synthetic" and low in EXCLUDED_SYNTHETIC:
+            continue
         if it["type"] == "synthetic" and low == "grades.csv":
             plan[p] = {"kind": "grades", "md": unique("Grades.md"), "file": None}
         elif it["type"] in ("file", "media"):
