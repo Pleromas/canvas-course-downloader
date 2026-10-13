@@ -1,6 +1,7 @@
 MIT License
 
-Copyright (c) 2026 jasp-nerd
+Copyright (c) 2026 jasp-nerd (Canvas Course Downloader, original work)
+Copyright (c) 2026 Pleromas (Canvas Vault modifications and the sync/ pipeline)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

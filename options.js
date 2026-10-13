@@ -1,5 +1,5 @@
 /**
- * Options page script for Canvas Course Downloader.
+ * Options page script for Canvas Vault.
  *
  * Manages user preferences stored in chrome.storage.sync.
  */

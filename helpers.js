@@ -1,5 +1,5 @@
 /**
- * Canvas Course Downloader — Pure Utility Helpers
+ * Canvas Vault — Pure Utility Helpers
  *
  * Stateless utility functions used across the extension.
  * These have no DOM or Chrome API dependencies (except getCanvasBrandColor/darkenColor

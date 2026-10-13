@@ -1,4 +1,4 @@
-# Canvas Course Downloader — project brief for Claude Code
+# Canvas Vault (fork of canvas-course-downloader) — project brief for Claude Code
 
 This repo is a fork of https://github.com/jasp-nerd/canvas-course-downloader (MIT, v2.11.0),
 a browser extension that exports everything a student can see in a Canvas LMS course
@@ -17,7 +17,7 @@ first, then extend it (see Roadmap).
   cannot create API access tokens there, which is why the session-cookie approach of this
   extension is the only workable route. Example course id seen: 133044.
 - Debugging: background-script console = `about:debugging` → **Inspect** next to the
-  extension. Content-script logs (prefixed `[Canvas Downloader]`) = F12 console on the
+  extension. Content-script logs (prefixed `[Canvas Vault]`) = F12 console on the
   Canvas tab. The download panel's "Failed files" list shows `job.error` strings from
   `background.js`.
 

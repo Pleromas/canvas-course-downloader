@@ -1,5 +1,5 @@
 /**
- * Canvas Course Downloader — Download Orchestration
+ * Canvas Vault — Download Orchestration
  *
  * Settings management, ZIP bundling, course content fetching,
  * and download handoff to the background service worker.
@@ -215,7 +215,7 @@ async function fetchQuizReviewViaHtml(quiz) {
     });
     return html;
   } catch (err) {
-    console.warn(`[Canvas Downloader] Quiz review scrape failed for "${quiz.title}":`, err);
+    console.warn(`[Canvas Vault] Quiz review scrape failed for "${quiz.title}":`, err);
     return null;
   }
 }
@@ -280,7 +280,7 @@ async function downloadAsZip(files, courseName, settings, log) {
         completed++;
       } catch (err) {
         if (err && err.name === "AbortError") break;
-        console.warn(`[Canvas Downloader] ZIP: failed to fetch ${file.filename}:`, err);
+        console.warn(`[Canvas Vault] ZIP: failed to fetch ${file.filename}:`, err);
         failed++;
         failedFiles.push(file.filename);
         failedKeys.push(fullPath);
@@ -289,7 +289,7 @@ async function downloadAsZip(files, courseName, settings, log) {
     if (!abortController.signal.aborted && !downloadCancelled) blob = writer.finish();
   } catch (err) {
     clearInterval(cancelWatch);
-    console.error("[Canvas Downloader] ZIP generation failed:", err);
+    console.error("[Canvas Vault] ZIP generation failed:", err);
     log(`ZIP generation failed: ${err && err.message ? err.message : err}.`);
     updateDownloadPanel({
       total: totalFiles, completed, failed, queued: 0, downloading: 0,
@@ -368,7 +368,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
   const isMarkdown = settings.exportFormat === "markdown";
   const docExt = isMarkdown ? "md" : "html";
   const log = (msg) => {
-    console.log(`[Canvas Downloader] [${courseName}] ${msg}`);
+    console.log(`[Canvas Vault] [${courseName}] ${msg}`);
     if (onProgress) onProgress(msg);
   };
 
@@ -387,7 +387,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
         );
       }
     } catch (err) {
-      console.warn("[Canvas Downloader] CDN permission check failed:", err);
+      console.warn("[Canvas Vault] CDN permission check failed:", err);
     }
   }
 
@@ -428,7 +428,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
         for (const stu of sec.students || []) userIdToSection.set(String(stu.id), sec.name || "");
       }
     } catch (err) {
-      console.warn("[Canvas Downloader] Sections fetch failed:", err);
+      console.warn("[Canvas Vault] Sections fetch failed:", err);
     }
   }
 
@@ -587,7 +587,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
           });
         }
       } catch (err) {
-        console.error(`[Canvas Downloader] Error fetching linked file ${id} from ${source}:`, err);
+        console.error(`[Canvas Vault] Error fetching linked file ${id} from ${source}:`, err);
         recordInaccessible(link, ref, source, "error", sourceCourseId);
       }
     }
@@ -646,7 +646,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       }
       info = await res.json();
     } catch (err) {
-      console.error(`[Canvas Downloader] Error resolving media ${key} from ${source}:`, err);
+      console.error(`[Canvas Vault] Error resolving media ${key} from ${source}:`, err);
       noteInaccessible(source, label, ref.ref || infoUrl, "error");
       return null;
     }
@@ -729,7 +729,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
           }
         }
       } catch (err) {
-        console.warn(`[Canvas Downloader] Could not fetch captions for ${filename}:`, err);
+        console.warn(`[Canvas Vault] Could not fetch captions for ${filename}:`, err);
       }
     }
 
@@ -963,7 +963,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
         if (!res.ok) continue;
         s = await res.json();
       } catch (err) {
-        console.warn(`[Canvas Downloader] Own submission fetch failed for ${a.name}:`, err);
+        console.warn(`[Canvas Vault] Own submission fetch failed for ${a.name}:`, err);
         continue;
       }
       const safeAssignment = sanitizeFilename(a.name).substring(0, 80);
@@ -1065,10 +1065,10 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
           const repliesHtml = await renderEntries(view.view, participantName, d.title, `Discussions/${safeTopic}/`);
           if (repliesHtml) body += `<hr><h3>Replies</h3>${repliesHtml}`;
         } else {
-          console.warn(`[Canvas Downloader] Discussion thread unavailable (${d.title}) — HTTP ${res.status}`);
+          console.warn(`[Canvas Vault] Discussion thread unavailable (${d.title}) — HTTP ${res.status}`);
         }
       } catch (err) {
-        console.error(`[Canvas Downloader] Discussion thread error (${d.title}):`, err);
+        console.error(`[Canvas Vault] Discussion thread error (${d.title}):`, err);
       }
 
       if (isTeacher) {
@@ -1099,7 +1099,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
               body += `<p><em>Graded discussion — per-student scores in <code>${safeTopic}/_grades.csv</code>.</em></p>`;
             }
           } catch (err) {
-            console.error(`[Canvas Downloader] Discussion grades error (${d.title}):`, err);
+            console.error(`[Canvas Vault] Discussion grades error (${d.title}):`, err);
           }
         }
       }
@@ -1188,7 +1188,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
               });
             }
           } catch (err) {
-            console.error(`[Canvas Downloader] Module file error (${item.title}):`, err);
+            console.error(`[Canvas Vault] Module file error (${item.title}):`, err);
           }
         }
       }
@@ -1206,12 +1206,12 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
   let exportedPagesCount = 0;
   if (pageSlugsToFetch.size > 0) {
     log(`Fetching ${pageSlugsToFetch.size} page${pageSlugsToFetch.size === 1 ? "" : "s"}...`);
-    console.log("[Canvas Downloader] Page slugs to fetch:", [...pageSlugsToFetch]);
+    console.log("[Canvas Vault] Page slugs to fetch:", [...pageSlugsToFetch]);
     for (const slug of pageSlugsToFetch) {
       try {
         const res = await fetchWithRetry(`${domain}/api/v1/courses/${courseId}/pages/${slug}`);
         if (!res.ok) {
-          console.warn(`[Canvas Downloader] Page fetch failed for "${slug}" — HTTP ${res.status}`);
+          console.warn(`[Canvas Vault] Page fetch failed for "${slug}" — HTTP ${res.status}`);
           continue;
         }
         const page = await res.json();
@@ -1239,11 +1239,11 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
 
         if (types.linkedFiles && page.body) await extractLinkedFiles(page.body, `Page: ${page.title}`);
       } catch (err) {
-        console.warn(`[Canvas Downloader] Could not fetch page ${slug}:`, err);
+        console.warn(`[Canvas Vault] Could not fetch page ${slug}:`, err);
       }
     }
   } else if (types.pages) {
-    console.log("[Canvas Downloader] No pages found via Pages API list or Modules — nothing to fetch.");
+    console.log("[Canvas Vault] No pages found via Pages API list or Modules — nothing to fetch.");
   }
 
   // --- Syllabus --------------------------------------------------------------
@@ -1267,7 +1267,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
         }
       }
     } catch (err) {
-      console.error("[Canvas Downloader] Syllabus error:", err);
+      console.error("[Canvas Vault] Syllabus error:", err);
     }
   }
 
@@ -1318,7 +1318,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
         path: "",
       });
     } catch (err) {
-      console.error("[Canvas Downloader] Gradebook error:", err);
+      console.error("[Canvas Vault] Gradebook error:", err);
     }
   }
 
@@ -1357,7 +1357,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
         });
       }
     } catch (err) {
-      console.error("[Canvas Downloader] Grades error:", err);
+      console.error("[Canvas Vault] Grades error:", err);
     }
   }
 
@@ -1378,7 +1378,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
         filesToDownload.push(buildDocEntry(`Grading Weights — ${courseName}`, body, "Grading Weights", "", "grading-weights"));
       }
     } catch (err) {
-      console.error("[Canvas Downloader] Grading weights error:", err);
+      console.error("[Canvas Vault] Grading weights error:", err);
     }
   }
 
@@ -1412,7 +1412,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
           const questions = await fetchAllPages(api(`quizzes/${quiz.id}/questions?per_page=100`));
           body += renderQuizQuestions(questions);
         } catch (err) {
-          console.error(`[Canvas Downloader] Quiz questions error (${quiz.title}):`, err);
+          console.error(`[Canvas Vault] Quiz questions error (${quiz.title}):`, err);
         }
         // Per-student scores + _grades.csv. The quiz-submissions endpoint
         // returns a wrapped object ({ quiz_submissions, users }), not a bare
@@ -1451,7 +1451,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
             }
           }
         } catch (err) {
-          console.error(`[Canvas Downloader] Quiz submissions error (${quiz.title}):`, err);
+          console.error(`[Canvas Vault] Quiz submissions error (${quiz.title}):`, err);
         }
       } else {
         // Student: own score, plus own answered questions when allowed.
@@ -1474,7 +1474,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
                   body += renderOwnQuizAnswers(qdata.quiz_submission_questions || []);
                 }
               } catch (err) {
-                console.warn(`[Canvas Downloader] Own quiz answers unavailable (${quiz.title}):`, err);
+                console.warn(`[Canvas Vault] Own quiz answers unavailable (${quiz.title}):`, err);
               }
             }
           }
@@ -1483,7 +1483,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
             if (scraped) body += scraped;
           }
         } catch (err) {
-          console.error(`[Canvas Downloader] Quiz result error (${quiz.title}):`, err);
+          console.error(`[Canvas Vault] Quiz result error (${quiz.title}):`, err);
         }
       }
 
@@ -1823,7 +1823,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
     }
     log(`ZIP bundling skipped: ${zipFallbackReason.split("\n")[0]} — falling back to individual file downloads.`);
     const diag = [
-      `Canvas Course Downloader ${chrome.runtime.getManifest().version}`,
+      `Canvas Vault ${chrome.runtime.getManifest().version}`,
       `userAgent: ${navigator.userAgent}`,
       `zipMode: ${settings.zipMode}, folderPrefix: ${JSON.stringify(settings.folderPrefix)}`,
       `typeof createZipWriter: ${typeof createZipWriter}`,
@@ -1866,7 +1866,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       },
       (response) => {
         if (chrome.runtime.lastError) {
-          console.error("[Canvas Downloader] Background error:", chrome.runtime.lastError);
+          console.error("[Canvas Vault] Background error:", chrome.runtime.lastError);
           return reject(chrome.runtime.lastError);
         }
         resolve(response);
@@ -1907,7 +1907,7 @@ async function downloadCurrentCourse() {
       setTimeout(() => { btn.textContent = originalText; btn.disabled = false; }, 3000);
     }
   } catch (err) {
-    console.error("[Canvas Downloader] Error:", err);
+    console.error("[Canvas Vault] Error:", err);
     showToast("An error occurred. Check the developer console for details.", "error");
     if (btn) { btn.textContent = originalText; btn.disabled = false; }
   }

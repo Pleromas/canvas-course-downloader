@@ -1,5 +1,5 @@
 /**
- * Canvas Course Downloader — Canvas Detection
+ * Canvas Vault — Canvas Detection
  *
  * Identifies whether the current page is a Canvas LMS instance,
  * extracts course IDs, and determines page type.

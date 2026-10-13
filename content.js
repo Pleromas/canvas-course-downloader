@@ -1,5 +1,5 @@
 /**
- * Canvas Course Downloader — Content Script (Entry Point)
+ * Canvas Vault — Content Script (Entry Point)
  *
  * Initializes the extension on Canvas pages: injects buttons,
  * handles SPA navigation, and listens for messages from the

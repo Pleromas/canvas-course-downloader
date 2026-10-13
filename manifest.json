@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Canvas Course Downloader & Exporter",
-  "description": "Download, export, and back up Canvas LMS course files, pages, assignments, grades, and more into organized folders.",
+  "name": "Canvas Vault",
+  "description": "Archive your Canvas LMS courses: files, pages, assignments, quizzes, grades and more, exported as one ZIP per course for versioned, offline keeping.",
   "version": "2.11.0",
   "browser_specific_settings": {
     "gecko": {
@@ -71,7 +71,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Canvas Course Downloader"
+    "default_title": "Canvas Vault"
   },
   "commands": {
     "download-current": {

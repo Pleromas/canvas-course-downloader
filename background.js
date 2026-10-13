@@ -1,5 +1,5 @@
 /**
- * Background service worker for Canvas Course Downloader.
+ * Background service worker for Canvas Vault.
  *
  * Manages download jobs with proper state tracking. Each file is tracked
  * through queued → downloading → complete/failed states using Chrome's
@@ -112,7 +112,7 @@ function notifyCompletion() {
   chrome.notifications.create("download-complete", {
     type: "basic",
     iconUrl: "icons/icon-128.png",
-    title: "Canvas Course Downloader",
+    title: "Canvas Vault",
     message: `Downloads finished: ${completed} succeeded${failed > 0 ? `, ${failed} failed` : ""}.`,
   });
 

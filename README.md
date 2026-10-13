@@ -1,18 +1,18 @@
-# Canvas Course Downloader
+# Canvas Vault
 
-A browser extension that bulk-downloads and archives your Canvas LMS courses into organized folders — including teacher-side data like student submissions, gradebooks, and quiz results.
+Archive your Canvas LMS courses and keep every version. A browser extension exports a course
+(files, pages, assignments, quizzes, announcements, discussions, modules, syllabus, grades,
+your submissions) as one ZIP; the bundled `canvas-sync` tool ingests each export into a
+content-addressed archive and reports exactly what changed since last time.
+
+> **Credit.** Canvas Vault is a fork of
+> [Canvas Course Downloader & Exporter](https://github.com/jasp-nerd/canvas-course-downloader) by jasp-nerd (MIT License).
+> The extension is overwhelmingly their work; this fork adds Firefox support, a deterministic
+> ZIP export, the versioned archive and a rebrand so the two are not confused. If the
+> original is what you want, use and star theirs. Full credits in `ATTRIBUTION.md`.
 
 <p align="center">
-  <img src="screenshots/banner.png" alt="Canvas Course Downloader — one click, every file, organized">
-</p>
-
-<p align="center">
-  Works on Chrome, Edge, Firefox, Brave, and other Chromium-based browsers.
-</p>
-
-<p align="center">
-  If this saved you time, a ⭐ helps others find it.<br>
-  If it saved you a semester, consider <a href="https://github.com/sponsors/jasp-nerd">sponsoring its maintenance</a> 💙
+  Works on Firefox and Chromium-based browsers. Tested daily on Firefox/Linux.
 </p>
 
 ## Why?
@@ -71,15 +71,15 @@ Pick which courses to download from your Canvas dashboard:
 
 ## Installation
 
-### Chrome Web Store
-
-Install directly from the [Chrome Web Store](https://chromewebstore.google.com/detail/mmnmcnffbkcnhcjiidmdnaclpfeekiol). Also works on Edge and Brave.
+Canvas Vault is not on any store. The upstream project is available on the
+[Chrome Web Store](https://chromewebstore.google.com/detail/mmnmcnffbkcnhcjiidmdnaclpfeekiol) if you want a
+store-managed install of the original.
 
 ### Manual install (Chrome / Edge / Brave)
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/jasp-nerd/canvas-course-downloader.git
+   git clone https://github.com/Pleromas/canvas-course-downloader.git
    ```
 2. Open your browser's extension page:
    - Chrome: `chrome://extensions`
@@ -281,11 +281,10 @@ For the full privacy policy, see [PRIVACY.md](PRIVACY.md).
 
 ## Support
 
-This extension is free and MIT licensed, and it stays that way. Keeping it working as Canvas changes takes real time, so if it's useful to you, you can [sponsor the project on GitHub](https://github.com/sponsors/jasp-nerd). Sponsoring doesn't buy priority support or faster development — it just makes it possible to keep going.
-
-### Supporters
-
-_Be the first!_
+Canvas Vault is a personal fork, free and MIT licensed. Bugs and ideas:
+[issues](https://github.com/Pleromas/canvas-course-downloader/issues). Most of the hard work is
+upstream's; if this saves you a semester, consider
+[sponsoring jasp-nerd](https://github.com/sponsors/jasp-nerd), who maintains the original as Canvas changes.
 
 ## Contributing
 

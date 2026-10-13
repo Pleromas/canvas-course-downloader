@@ -1,5 +1,5 @@
 /**
- * Canvas Course Downloader — Canvas API Helpers
+ * Canvas Vault — Canvas API Helpers
  *
  * Handles all communication with the Canvas REST API, including
  * pagination, retry logic, and timeout handling.
@@ -23,12 +23,12 @@ async function fetchWithRetry(url, options = {}, retries = MAX_RETRIES) {
       if (res.ok || (res.status < 500 && res.status !== 429)) return res;
       if (attempt === retries) return res;
       const delay = Math.min(1000 * 2 ** attempt, 8000);
-      console.warn(`[Canvas Downloader] ${res.status} on ${url}, retrying in ${delay}ms...`);
+      console.warn(`[Canvas Vault] ${res.status} on ${url}, retrying in ${delay}ms...`);
       await new Promise((r) => setTimeout(r, delay));
     } catch (err) {
       if (attempt === retries) throw err;
       const delay = Math.min(1000 * 2 ** attempt, 8000);
-      console.warn(`[Canvas Downloader] Fetch error on ${url}, retrying in ${delay}ms...`);
+      console.warn(`[Canvas Vault] Fetch error on ${url}, retrying in ${delay}ms...`);
       await new Promise((r) => setTimeout(r, delay));
     }
   }
@@ -46,7 +46,7 @@ async function fetchAllPages(url) {
       });
 
       if (!res.ok) {
-        console.warn(`[Canvas Downloader] ${res.status} ${res.statusText} — ${next}`);
+        console.warn(`[Canvas Vault] ${res.status} ${res.statusText} — ${next}`);
         break;
       }
 
@@ -55,9 +55,9 @@ async function fetchAllPages(url) {
       next = parsePaginationLink(res.headers.get("link"));
     } catch (err) {
       if (err.name === "AbortError") {
-        console.warn(`[Canvas Downloader] Request timed out: ${next}`);
+        console.warn(`[Canvas Vault] Request timed out: ${next}`);
       } else {
-        console.error("[Canvas Downloader] API error:", err);
+        console.error("[Canvas Vault] API error:", err);
       }
       break;
     }
@@ -91,7 +91,7 @@ async function fetchCourseRole(domain, courseId) {
     const teacherRoles = ["teacher", "ta", "designer"];
     return (course.enrollments || []).some((e) => teacherRoles.includes(e.type));
   } catch (err) {
-    console.warn("[Canvas Downloader] Role detection failed, assuming student:", err);
+    console.warn("[Canvas Vault] Role detection failed, assuming student:", err);
     return false;
   }
 }

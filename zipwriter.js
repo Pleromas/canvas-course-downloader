@@ -1,5 +1,5 @@
 /**
- * Canvas Course Downloader — minimal ZIP writer
+ * Canvas Vault — minimal ZIP writer
  *
  * Store-only (no compression) ZIP archive builder that works inside a Firefox
  * content script. client-zip could not be used there: it produces its output
