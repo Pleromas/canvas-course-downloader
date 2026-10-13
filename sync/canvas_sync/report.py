@@ -22,7 +22,7 @@ def _date(v) -> str:
 
 def _label(ch: ItemChange) -> str:
     t = "grades" if ch.key.endswith("grades.csv") else _TYPE_LABEL.get(ch.type, ch.type)
-    return t.ljust(_COL)
+    return t.ljust(max(_COL, len(t) + 1))
 
 
 def _size(n) -> str:

@@ -45,3 +45,8 @@ class ReportTests(TempStore):
         self.assertIsNotNone(row["report_path"])
         self.assertTrue(row["report_path"].endswith(".md"))
         self.assertIn("1 new", res.summary)
+
+    def test_long_type_label_keeps_a_gap(self):
+        cs = ChangeSet("1", "C", 1, "2026-10-06T20:31:00Z", None, None)
+        cs.new.append(ItemChange("new", "announcement", "5", "CSSS Event", "Announcements/CSSS Event.html"))
+        self.assertIn("- announcement CSSS Event", render_report(cs))
