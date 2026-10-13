@@ -229,20 +229,6 @@ async function fetchQuizReviewViaHtml(quiz) {
 // so the threshold is conservative.
 const ZIP_MAX_TOTAL_BYTES = 1.5 * 1024 * 1024 * 1024;
 
-/** Wraps a ReadableStream as an async iterator of Uint8Array chunks. */
-async function* streamChunks(stream) {
-  const reader = stream.getReader();
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) return;
-      yield value instanceof Uint8Array ? value : new Uint8Array(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-}
-
 async function downloadAsZip(files, courseName, settings, log) {
   const safeName = sanitizeFilename(courseName);
   const totalFiles = files.length;
@@ -261,14 +247,19 @@ async function downloadAsZip(files, courseName, settings, log) {
     if (downloadCancelled && !abortController.signal.aborted) abortController.abort();
   }, 100);
 
-  // client-zip pulls from this generator lazily: each yield happens after the
-  // previous file's body has been fully streamed into the archive. We use the
-  // yield boundary to update the panel, so progress reflects real archive
-  // state, not just enqueue order.
-  async function* fileSource() {
-    const now = new Date();
+  log("Generating ZIP file...");
+
+  // Own store-only writer (zipwriter.js). No streams: Firefox content scripts
+  // cannot hand a sandbox-created ReadableStream to the page realm, which is
+  // what client-zip did and why ZIP mode silently fell back to loose files
+  // there. Each file is fetched whole, CRC'd and appended; the archive is one
+  // Blob at the end. ZIP_MAX_TOTAL_BYTES keeps that within reason.
+  const writer = createZipWriter();
+  const now = new Date();
+  let blob;
+  try {
     for (const file of files) {
-      if (abortController.signal.aborted) return;
+      if (abortController.signal.aborted) break;
       if (file.filename === "manifest.json" && file.path === "" && typeof file.finalize === "function") {
         file.finalize(failedKeys);
       }
@@ -280,59 +271,23 @@ async function downloadAsZip(files, courseName, settings, log) {
       });
 
       try {
-        let input;
-        if (file.url.startsWith("data:")) {
-          const res = await fetch(file.url);
-          input = new Uint8Array(await res.arrayBuffer());
-        } else {
-          const res = await fetch(file.url, { signal: abortController.signal });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          // Hand client-zip an async iterator rather than the raw ReadableStream.
-          // Firefox gives content scripts cross-realm stream objects that fail
-          // client-zip's `instanceof ReadableStream` check ("Unsupported input
-          // format"), which used to abort the whole archive and fall back to
-          // loose per-file downloads. An iterator of Uint8Array chunks passes the
-          // duck-typed `Symbol.asyncIterator` check on both browsers.
-          input = streamChunks(res.body);
-        }
+        const res = file.url.startsWith("data:")
+          ? await fetch(file.url)
+          : await fetch(file.url, { signal: abortController.signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        writer.add(fullPath, new Uint8Array(await res.arrayBuffer()), now);
         completed++;
-        yield {
-          name: fullPath,
-          input,
-          lastModified: now,
-          ...(file.size ? { size: file.size } : {}),
-        };
       } catch (err) {
-        if (err && err.name === "AbortError") return;
+        if (err && err.name === "AbortError") break;
         console.warn(`[Canvas Downloader] ZIP: failed to fetch ${file.filename}:`, err);
         failed++;
         failedFiles.push(file.filename);
         failedKeys.push(fullPath);
       }
     }
-  }
-
-  log("Generating ZIP file (streaming)...");
-
-  let blob;
-  try {
-    // client-zip returns a Response whose body streams ZIP bytes as the
-    // generator is consumed. Calling .blob() lets the browser materialize the
-    // archive from the stream — peak memory is bounded by the network chunk
-    // size per file plus the final Blob, vs JSZip which buffered every input
-    // file plus the entire output before emitting.
-    const response = downloadZip(fileSource(), { buffersAreUTF8: true });
-    blob = await response.blob();
+    if (!abortController.signal.aborted && !downloadCancelled) blob = writer.finish();
   } catch (err) {
     clearInterval(cancelWatch);
-    if (abortController.signal.aborted || downloadCancelled) {
-      log("Cancelled during ZIP generation.");
-      updateDownloadPanel({
-        total: totalFiles, completed, failed, queued: 0, downloading: 0,
-        currentFile: null, failedFiles, done: true, cancelled: true,
-      });
-      return { cancelled: true, failedKeys };
-    }
     console.error("[Canvas Downloader] ZIP generation failed:", err);
     log(`ZIP generation failed: ${err && err.message ? err.message : err}.`);
     updateDownloadPanel({
@@ -1828,8 +1783,8 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
   // even when nobody is watching the console.
   let zipFallbackReason = "";
   if (settings.zipMode) {
-    if (typeof downloadZip === "undefined") {
-      zipFallbackReason = "client-zip did not load: `downloadZip` is undefined in the content script.";
+    if (typeof createZipWriter === "undefined") {
+      zipFallbackReason = "zipwriter.js did not load: `createZipWriter` is undefined in the content script.";
     } else {
       const estimatedBytes = filesToDownload.reduce((sum, f) => sum + (f.size || 0), 0);
       if (estimatedBytes > ZIP_MAX_TOTAL_BYTES) {
@@ -1860,7 +1815,7 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
       `Canvas Course Downloader ${chrome.runtime.getManifest().version}`,
       `userAgent: ${navigator.userAgent}`,
       `zipMode: ${settings.zipMode}, folderPrefix: ${JSON.stringify(settings.folderPrefix)}`,
-      `typeof downloadZip: ${typeof downloadZip}`,
+      `typeof createZipWriter: ${typeof createZipWriter}`,
       `files: ${filesToDownload.length}`,
       "",
       zipFallbackReason,

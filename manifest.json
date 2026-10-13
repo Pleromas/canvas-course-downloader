@@ -46,7 +46,7 @@
         "https://*/*"
       ],
       "js": [
-        "client-zip.min.js",
+        "zipwriter.js",
         "turndown.min.js",
         "turndown-plugin-gfm.min.js",
         "helpers.js",

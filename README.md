@@ -221,7 +221,7 @@ canvas-course-downloader/
 ├── canvas-api.js        # Canvas REST API: fetch with retry, pagination, timeouts
 ├── detector.js          # Canvas page and course detection
 ├── helpers.js           # Pure utilities: sanitization, parsing, color math
-├── client-zip.min.js    # client-zip library (streaming ZIP generator)
+├── zipwriter.js         # minimal store-only ZIP writer (no streams; works in Firefox content scripts)
 ├── turndown.min.js      # turndown (HTML → Markdown) for the Markdown export mode
 ├── turndown-plugin-gfm.min.js  # GFM tables / strikethrough plugin for turndown
 ├── popup.html / js      # Extension popup

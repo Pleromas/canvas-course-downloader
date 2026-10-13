@@ -30,7 +30,8 @@ first, then extend it (see Roadmap).
 - `downloader.js` — content script. Fetches Canvas API, builds the file list, generates
   synthetic files (HTML pages, `styles.css`, `Grades.csv`, `manifest.json`,
   `_inaccessible_links.csv`) as `data:` URLs. Has a ZIP mode (`zipMode: true` by default
-  in settings) using client-zip that fetches everything in-page and emits one
+  in settings) using the own store-only writer in `zipwriter.js` (client-zip was
+  dropped: its ReadableStream output is refused by Firefox content scripts) that fetches everything in-page and emits one
   `blob:` URL per course; it falls back to loose per-file downloads above
   `ZIP_MAX_TOTAL_BYTES` (1.5 GB) or when ZIP is disabled.
 - `content.js`, `popup.*`, `options.*` — UI.
