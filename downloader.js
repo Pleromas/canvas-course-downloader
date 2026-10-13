@@ -316,8 +316,9 @@ async function downloadAsZip(files, courseName, settings, log) {
   // runtime messaging, so hand the Blob to the background and let it mint the URL
   // in its own context. Chrome cannot clone Blobs in messages (they arrive as {})
   // but accepts the content-script blob: URL, so it keeps that path. Feature
-  // detection: `browser.runtime.getBrowserInfo` only exists on Gecko.
-  const canSendBlob = typeof browser !== "undefined" && typeof browser.runtime?.getBrowserInfo === "function";
+  // detection by extension URL scheme: Gecko serves extensions from
+  // moz-extension://, Chromium from chrome-extension://.
+  const canSendBlob = chrome.runtime.getURL("").startsWith("moz-extension://");
   const url = canSendBlob ? null : URL.createObjectURL(blob);
   const fileEntry = canSendBlob ? { blob, filename, path: prefix } : { url, filename, path: prefix };
 
