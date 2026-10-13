@@ -127,6 +127,19 @@ function notifyCompletion() {
 // Download tracking via chrome.downloads.onChanged
 // ---------------------------------------------------------------------------
 
+// Blob URLs minted in this context (data: conversions, Firefox ZIP hand-off)
+// are released once the download has finished with them; a retry re-creates
+// them from `job.url` / the original data: URL as needed.
+function releaseBlobUrls(job) {
+  if (typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") return;
+  for (const key of ["blobUrl"]) {
+    if (job[key] && job[key].startsWith("blob:")) {
+      try { URL.revokeObjectURL(job[key]); } catch { /* already gone */ }
+      job[key] = null;
+    }
+  }
+}
+
 chrome.downloads.onChanged.addListener(async (delta) => {
   await ensureStateLoaded();
   const job = chromeIdToJob.get(delta.id);
@@ -135,6 +148,7 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   if (delta.state?.current === "complete") {
     job.state = STATE.COMPLETE;
     chromeIdToJob.delete(delta.id);
+    releaseBlobUrls(job);
     await persistState();
     broadcastStatus();
     scheduleNext();
@@ -142,6 +156,7 @@ chrome.downloads.onChanged.addListener(async (delta) => {
     job.state = STATE.FAILED;
     job.error = delta.error?.current || "Download interrupted";
     chromeIdToJob.delete(delta.id);
+    releaseBlobUrls(job);
     await persistState();
     broadcastStatus();
     scheduleNext();
@@ -269,7 +284,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const prefix = downloadSettings.folderPrefix ? `${downloadSettings.folderPrefix}/` : "";
       const newJobs = files.map((file) => ({
         id: nextJobId++,
-        url: file.url,
+        // Firefox content scripts send the ZIP as a Blob (see downloadAsZip):
+        // mint the blob: URL here, in the background's own context, which
+        // downloads.download() accepts. Only the string is persisted.
+        url: file.url || (file.blob && typeof URL !== "undefined" && typeof URL.createObjectURL === "function"
+          ? URL.createObjectURL(file.blob) : ""),
         filename: file.filename,
         path: `${prefix}${safeName}/${file.path}`.replace(/\/+/g, "/"),
         state: STATE.QUEUED,

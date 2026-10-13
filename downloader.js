@@ -308,15 +308,24 @@ async function downloadAsZip(files, courseName, settings, log) {
     return { cancelled: true, failedKeys };
   }
 
-  const url = URL.createObjectURL(blob);
   const prefix = settings.folderPrefix ? `${sanitizeFilename(settings.folderPrefix)}/` : "";
   const filename = `${safeName}.zip`;
+
+  // Firefox refuses blob: URLs minted by a content script in downloads.download()
+  // ("Access denied for URL blob:…"). Firefox can structured-clone a Blob through
+  // runtime messaging, so hand the Blob to the background and let it mint the URL
+  // in its own context. Chrome cannot clone Blobs in messages (they arrive as {})
+  // but accepts the content-script blob: URL, so it keeps that path. Feature
+  // detection: `browser.runtime.getBrowserInfo` only exists on Gecko.
+  const canSendBlob = typeof browser !== "undefined" && typeof browser.runtime?.getBrowserInfo === "function";
+  const url = canSendBlob ? null : URL.createObjectURL(blob);
+  const fileEntry = canSendBlob ? { blob, filename, path: prefix } : { url, filename, path: prefix };
 
   await new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(
       // `path` carries the folder: the background sanitizer replaces "/" inside
       // `filename`, so a prefix embedded there used to collapse into "prefix-course.zip".
-      { type: "START_DOWNLOAD", payload: { files: [{ url, filename, path: prefix }], courseName: "", conflictAction: settings.conflictAction, throttleMs: 0, folderPrefix: "" } },
+      { type: "START_DOWNLOAD", payload: { files: [fileEntry], courseName: "", conflictAction: settings.conflictAction, throttleMs: 0, folderPrefix: "" } },
       (response) => {
         if (chrome.runtime.lastError) return reject(chrome.runtime.lastError);
         resolve(response);
@@ -324,7 +333,7 @@ async function downloadAsZip(files, courseName, settings, log) {
     );
   });
 
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  if (url) setTimeout(() => URL.revokeObjectURL(url), 60000);
 
   updateDownloadPanel({
     total: totalFiles, completed, failed, queued: 0, downloading: 0,
