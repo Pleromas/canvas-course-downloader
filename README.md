@@ -98,6 +98,25 @@ Install directly from the [Chrome Web Store](https://chromewebstore.google.com/d
 
 > Firefox temporary add-ons expire when the browser restarts. You'll need to reload from `about:debugging` each session.
 
+#### Permanent install on Firefox (signed XPI)
+
+Firefox only keeps add-ons that Mozilla has signed. Self-distribution ("unlisted") signing
+is free and automatic; it needs an API key from your AMO account once:
+
+1. Create a key at https://addons.mozilla.org/developers/addon/api/key/ (JWT issuer + secret).
+2. From the repo root:
+
+       export WEB_EXT_API_KEY='user:…'     # JWT issuer
+       export WEB_EXT_API_SECRET='…'       # JWT secret
+       npx web-ext@8 sign
+
+   The signed file lands in `web-ext-artifacts/*.xpi`.
+3. In Firefox: `about:addons` → gear → *Install Add-on From File…* → pick the `.xpi`.
+
+The add-on id in `manifest.json` (`canvas-course-downloader@pleromas`) is tied to the AMO
+account that first signs it; change it if you sign under another account. Re-run `sign`
+after bumping `version` in `manifest.json` for each new build; Firefox updates in place.
+
 ## Usage
 
 ### Single course

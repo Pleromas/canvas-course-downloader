@@ -9,3 +9,4 @@ sync/**/__pycache__/
 sync/*.egg-info/
 sync/build/
 .superpowers/
+web-ext-artifacts/
