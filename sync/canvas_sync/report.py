@@ -68,6 +68,9 @@ def render_report(cs: ChangeSet) -> str:
         out += _changed_lines(c)
     out.append(f"## Removed ({len(cs.removed)})")
     out += [f"- {_label(c)}{c.title}" for c in cs.removed]
+    if cs.restored:
+        out.append(f"## Restored ({len(cs.restored)})")
+        out += [f"- {_label(c)}{c.title}" for c in cs.restored]
     diffs = [c for c in cs.changed if c.body_diff]
     if diffs:
         out.append("")
@@ -77,7 +80,10 @@ def render_report(cs: ChangeSet) -> str:
 
 
 def one_line(cs: ChangeSet) -> str:
-    return f"{cs.course_name}: {len(cs.new)} new, {len(cs.changed)} changed, {len(cs.removed)} removed"
+    s = f"{cs.course_name}: {len(cs.new)} new, {len(cs.changed)} changed, {len(cs.removed)} removed"
+    if cs.restored:
+        s += f", {len(cs.restored)} restored"
+    return s
 
 
 def write_report(store: Store, cs: ChangeSet) -> Path:

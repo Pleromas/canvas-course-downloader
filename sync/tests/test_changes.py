@@ -65,4 +65,5 @@ class ChangeTests(TempStore):
         cs = compute_changes(self.store, r2)
         self.assertEqual(cs.new, [])
         self.assertEqual(cs.removed, [])
-        self.assertEqual(cs.changed[0].meta_diff, [("title", "A1", "A1 (updated)")])
+        self.assertEqual(cs.changed[0].meta_diff, [("title", "A1", "A1 (updated)"),
+                                                   ("path", "Assignments/A1.html", "Assignments/A1 (updated).html")])

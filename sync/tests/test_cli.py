@@ -72,3 +72,6 @@ class UnitFileTests(TempStore):
         self.assertIn("PathChanged=%h/Downloads/CanvasExports", path_unit)
         self.assertIn("ExecStart=@CANVAS_SYNC@ ingest-all --notify", svc)
         self.assertIn("Type=oneshot", svc)
+        timer = (d / "canvas-sync.timer").read_text()
+        self.assertIn("OnUnitActiveSec=15min", timer)
+        self.assertIn("Unit=canvas-sync.service", timer)

@@ -135,13 +135,13 @@ def ingest_zip(store: Store, zip_path: Path, keep: bool = True, notify: bool = F
                     continue
                 warnings.append(f"{item.path} missing from ZIP")
                 continue
-            data = zf.read(item.path)
-            sha = store.put_blob(data)
-            blobs[item.path] = (sha, len(data))
+            with zf.open(item.path) as member:
+                sha, size = store.put_blob_stream(member)
+            blobs[item.path] = (sha, size)
             mime = item.meta.get("content_type") or mimetypes.guess_type(item.path)[0]
             store.db.execute(
                 "insert or ignore into blobs(sha256,size,mime,first_seen) values(?,?,?,?)",
-                (sha, len(data), mime, _now()))
+                (sha, size, mime, _now()))
 
         try:
             run_id, carried = _record_run(store, manifest, zip_sha, blobs, warnings)
@@ -215,6 +215,9 @@ def _record_run(store: Store, m: Manifest, zip_sha: str, blobs: dict, warnings: 
         meta_json = canonical_meta(it.meta)
         if row:
             item_id = row["id"]
+            was_removed = db.execute("select removed_run from items where id=?", (item_id,)).fetchone()["removed_run"]
+            if was_removed is not None:
+                db.execute("insert or ignore into restorations(item_id, run_id) values(?,?)", (item_id, run_id))
             db.execute("update items set last_run=?, removed_run=NULL where id=?", (run_id, item_id))
         else:
             item_id = db.execute(

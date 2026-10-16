@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .changes import _change_for
+from .changes import change_for
 from . import ingest as ingest_mod
 from .ingest import ingest_zip
 from .manifest import ManifestError
@@ -118,7 +118,7 @@ def cmd_diff(store: Store, a) -> int:
     if va is None or vb is None:
         print("item has no version at one of those runs")
         return 2
-    ch = _change_for(store, {"type": item["type"], "key": item["key"]}, dict(vb), dict(va))
+    ch = change_for(store, {"type": item["type"], "key": item["key"]}, dict(vb), dict(va))
     for k, o, n in ch.meta_diff:
         print(f"{k}: {o} → {n}")
     for name, o, n in ch.grade_changes:
@@ -194,11 +194,11 @@ def cmd_install_units(store: Store, a) -> int:
     dest = Path.home() / ".config" / "systemd" / "user"
     dest.mkdir(parents=True, exist_ok=True)
     exe = shutil.which("canvas-sync") or f"{sys.executable} -m canvas_sync"
-    for name in ("canvas-sync.path", "canvas-sync.service"):
+    for name in ("canvas-sync.path", "canvas-sync.service", "canvas-sync.timer"):
         text = (src / name).read_text().replace("@CANVAS_SYNC@", exe)
         (dest / name).write_text(text)
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=False)
-    subprocess.run(["systemctl", "--user", "enable", "--now", "canvas-sync.path"], check=False)
+    subprocess.run(["systemctl", "--user", "enable", "--now", "canvas-sync.path", "canvas-sync.timer"], check=False)
     print(f"installed units to {dest}; watching {DEFAULT_INBOX}")
     return 0
 

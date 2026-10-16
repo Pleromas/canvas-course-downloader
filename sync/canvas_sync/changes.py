@@ -37,10 +37,11 @@ class ChangeSet:
     new: list[ItemChange] = field(default_factory=list)
     changed: list[ItemChange] = field(default_factory=list)
     removed: list[ItemChange] = field(default_factory=list)
+    restored: list[ItemChange] = field(default_factory=list)  # back after a removal
 
     @property
     def total(self) -> int:
-        return len(self.new) + len(self.changed) + len(self.removed)
+        return len(self.new) + len(self.changed) + len(self.removed) + len(self.restored)
 
 
 def _module_items_label(items) -> str:
@@ -76,7 +77,7 @@ def _decode(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def _change_for(store: Store, item: dict, cur: dict, prev: dict | None) -> ItemChange:
+def change_for(store: Store, item: dict, cur: dict, prev: dict | None) -> ItemChange:
     ch = ItemChange("new" if prev is None else "changed", item["type"], item["key"], cur["title"], cur["path"],
                     meta=json.loads(cur["meta_json"]))
     if prev is None:
@@ -85,6 +86,8 @@ def _change_for(store: Store, item: dict, cur: dict, prev: dict | None) -> ItemC
     ch.meta_diff = meta_diff(old_meta, new_meta)
     if prev["title"] != cur["title"]:
         ch.meta_diff.insert(0, ("title", prev["title"], cur["title"]))
+    if prev["path"] != cur["path"]:
+        ch.meta_diff.append(("path", prev["path"], cur["path"]))
     if prev["sha256"] != cur["sha256"] and cur["sha256"] and prev["sha256"]:
         old_b, new_b = store.read_blob(prev["sha256"]), store.read_blob(cur["sha256"])
         if item["type"] == "synthetic" and item["key"].endswith("grades.csv"):
@@ -115,8 +118,20 @@ def compute_changes(store: Store, run_id: int) -> ChangeSet:
     for v in rows:
         before = db.execute("select * from versions where item_id=? and id<? order by id desc limit 1",
                             (v["item_id"], v["id"])).fetchone()
-        ch = _change_for(store, {"type": v["type"], "key": v["key"]}, dict(v), dict(before) if before else None)
+        ch = change_for(store, {"type": v["type"], "key": v["key"]}, dict(v), dict(before) if before else None)
         (cs.new if ch.kind == "new" else cs.changed).append(ch)
+
+    # Items seen again in this run after having been marked removed by an
+    # earlier run. ingest clears removed_run on sight; the audit trail is the
+    # run id gap: last_run == this run and the previous version predates a
+    # removal we can find in the report history. We track it explicitly instead:
+    # ingest records (item_id, run_id) in `restorations`.
+    restored = db.execute(
+        "select i.type, i.key, v.title, v.path, v.meta_json from restorations r join items i on i.id=r.item_id "
+        "join versions v on v.id = (select id from versions where item_id=i.id order by id desc limit 1) "
+        "where r.run_id=? order by i.type, v.title", (run_id,)).fetchall()
+    for r in restored:
+        cs.restored.append(ItemChange("restored", r["type"], r["key"], r["title"], r["path"], meta=json.loads(r["meta_json"])))
 
     removed = db.execute(
         "select i.type, i.key, v.title, v.path, v.meta_json from items i "

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 
 SUPPORTED_SCHEMA = 2
@@ -73,6 +74,8 @@ def parse_manifest(data: dict) -> Manifest:
     for k in ("id", "name", "domain"):
         if not course.get(k):
             raise ManifestError(f"manifest course.{k} missing")
+    if not re.fullmatch(r"\d+", str(course["id"])):
+        raise ManifestError(f"manifest course.id must be numeric, got {course['id']!r}")
     if not data.get("exportedAt"):
         raise ManifestError("manifest exportedAt missing")
     items: list[Item] = []

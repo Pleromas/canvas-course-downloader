@@ -28,7 +28,13 @@ CREATE TABLE IF NOT EXISTS versions (
 CREATE INDEX IF NOT EXISTS versions_item ON versions(item_id, id);
 CREATE TABLE IF NOT EXISTS blobs (
   sha256 TEXT PRIMARY KEY, size INTEGER NOT NULL, mime TEXT, first_seen TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS restorations (
+  item_id INTEGER NOT NULL REFERENCES items(id), run_id INTEGER NOT NULL REFERENCES runs(id),
+  PRIMARY KEY(item_id, run_id));
 """
+
+
+SCHEMA_VERSION = 1  # bump with a migration step in Store.__init__ when the schema changes
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -50,6 +56,11 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys = ON")
         self.db.executescript(SCHEMA)
+        current = self.db.execute("pragma user_version").fetchone()[0]
+        if current < SCHEMA_VERSION:
+            # No migrations yet; future schema changes go here, keyed on `current`.
+            self.db.execute(f"pragma user_version = {SCHEMA_VERSION}")
+            self.db.commit()
 
     @staticmethod
     def default_root() -> Path:
@@ -83,6 +94,29 @@ class Store:
         # edit there would silently corrupt the history store.
         os.chmod(dest, 0o444)
         return sha
+
+    def put_blob_stream(self, fileobj, chunk: int = 1 << 20) -> tuple[str, int]:
+        """Like put_blob for a readable binary stream: hashes while writing to a
+        temp file so a 1 GB lecture video never sits in memory. Returns (sha, size)."""
+        h = hashlib.sha256()
+        size = 0
+        tmp = self.tmp / uuid.uuid4().hex
+        with open(tmp, "wb") as fh:
+            for block in iter(lambda: fileobj.read(chunk), b""):
+                h.update(block)
+                size += len(block)
+                fh.write(block)
+            fh.flush()
+            os.fsync(fh.fileno())
+        sha = h.hexdigest()
+        dest = self.blob_path(sha)
+        if dest.exists():
+            tmp.unlink()
+            return sha, size
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(tmp, dest)
+        os.chmod(dest, 0o444)
+        return sha, size
 
     def read_blob(self, sha: str) -> bytes:
         return self.blob_path(sha).read_bytes()
