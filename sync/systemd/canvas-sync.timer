@@ -2,8 +2,8 @@
 Description=Fallback sweep of ~/Downloads/CanvasExports in case a path event was missed
 
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=15min
+OnCalendar=*:0/15
+AccuracySec=1min
 Unit=canvas-sync.service
 
 [Install]
