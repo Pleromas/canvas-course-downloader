@@ -370,7 +370,8 @@ def _bbox_lines(pdf_path: Path) -> list[list[tuple[float, float, float, float, s
 def _add_toc_links(writer, toc_pages: list[int], toc_pdf: Path, entries: list[tuple[str, int, bool]]) -> int:
     """Overlay a GoTo link on every contents line, matched by title text in
     order. The link spans the printable width so the page number is clickable
-    too. Returns the number of links added (0 without poppler)."""
+    too. Returns the number of links added (0 without poppler). Entries that
+    could not be matched are left in LAST_TOC_UNMATCHED for diagnostics."""
     from pypdf.generic import ArrayObject, DictionaryObject, NameObject, NumberObject, RectangleObject
     boxes = _bbox_lines(toc_pdf)
     if not boxes:
@@ -419,7 +420,11 @@ def _add_toc_links(writer, toc_pages: list[int], toc_pdf: Path, entries: list[tu
                     page[NameObject("/Annots")] = ArrayObject()
                 page["/Annots"].append(writer._add_object(annot))
                 added += 1
+    LAST_TOC_UNMATCHED[:] = [t for t, _, _ in remaining]
     return added
+
+
+LAST_TOC_UNMATCHED: list[str] = []
 
 
 def _assemble(parts, md_dir: Path, printed: Path, out: Path, tmp: Path, snap) -> None:
