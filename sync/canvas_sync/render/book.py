@@ -407,7 +407,12 @@ def _add_toc_links(writer, toc_pages: list[int], toc_pdf: Path, entries: list[tu
                     NameObject("/Border"): ArrayObject([NumberObject(0), NumberObject(0), NumberObject(0)]),
                     NameObject("/Dest"): ArrayObject([target.indirect_reference, NameObject("/Fit")]),
                 })
-                writer.add_annotation(page_number=pi, annotation=annot)
+                # Not writer.add_annotation(): it rebuilds /Dest from its own Link
+                # class and would turn the page reference back into an integer.
+                annot[NameObject("/P")] = page.indirect_reference
+                if "/Annots" not in page:
+                    page[NameObject("/Annots")] = ArrayObject()
+                page["/Annots"].append(writer._add_object(annot))
                 added += 1
     return added
 
