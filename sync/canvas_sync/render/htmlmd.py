@@ -12,7 +12,7 @@ from html.parser import HTMLParser
 from typing import Callable
 
 VOID = {"br", "img", "hr", "meta", "link", "input", "source", "wbr", "col", "area", "base", "embed", "track"}
-DROP = {"script", "style", "noscript", "head", "title", "link", "meta", "template", "svg", "button", "input", "select", "textarea", "form", "nav"}
+DROP = {"script", "style", "noscript", "head", "title", "link", "meta", "template", "svg", "button", "form", "nav"}
 BLOCK = {"p", "div", "section", "article", "main", "header", "footer", "aside", "figure", "figcaption",
          "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "li", "blockquote", "pre", "table", "thead", "tbody",
          "tfoot", "tr", "td", "th", "hr", "iframe", "video", "audio", "details", "summary", "dl", "dt", "dd", "center"}
@@ -129,6 +129,27 @@ class _Conv:
             elif t in ("s", "del", "strike"):
                 inner = self.inline(n.children).strip()
                 out.append(f"~~{inner}~~" if inner else "")
+            elif t == "select":
+                # Quiz review pages keep the chosen answer as the selected <option>.
+                chosen = next((c for c in n.children if isinstance(c, El) and c.tag == "option"
+                               and "selected" in c.attrs), None)
+                if chosen is None:
+                    for c in n.children:  # optgroup
+                        if isinstance(c, El) and c.tag == "optgroup":
+                            chosen = next((o for o in c.children if isinstance(o, El) and o.tag == "option" and "selected" in o.attrs), None)
+                            if chosen:
+                                break
+                label = _norm(_plain(chosen)).strip() if chosen is not None else ""
+                out.append(f"**{label}**" if label else "*(no selection)*")
+            elif t == "input":
+                if (n.attrs.get("type") or "text").lower() in ("hidden", "submit", "button", "checkbox", "radio"):
+                    continue
+                val = _norm(n.attrs.get("value") or "").strip()
+                out.append(f"**{val}**" if val else "")
+            elif t == "textarea":
+                out.append(_norm(_plain(n)).strip())
+            elif t in ("option", "optgroup"):
+                continue
             elif t in BLOCK:
                 # Block inside an inline run (e.g. <p> inside <li>): flatten.
                 out.append("\n" + "\n\n".join(self.blocks([n])) + "\n")

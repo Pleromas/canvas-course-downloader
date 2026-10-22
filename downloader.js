@@ -125,94 +125,190 @@ function renderQuizQuestions(questions) {
 }
 
 /**
- * Renders the student's own answered quiz questions (best effort). Canvas
- * returns these via /quiz_submissions/{id}/questions only when the instructor
- * left "let students see their responses" on; otherwise the caller falls back
- * to a score-only page.
+ * Resolves what the student actually answered for one quiz_submission_question
+ * from the API, per question type. Returns an HTML fragment ("" when nothing
+ * recorded). Canvas stores the response in `q.answer`, whose shape depends on
+ * `q.question_type`:
+ *   multiple_choice / true_false      answer id
+ *   multiple_answers                  array of answer ids
+ *   matching                          array of {answer_id, match_id}
+ *   multiple_dropdowns                {blank_id: answer id}
+ *   fill_in_multiple_blanks           {blank_id: text}
+ *   short_answer / numerical / essay  text / number / html
+ */
+function renderOwnResponse(q) {
+  const a = q.answer;
+  if (a == null || a === "") return "";
+  const answers = Array.isArray(q.answers) ? q.answers : [];
+  const byId = new Map(answers.map((x) => [String(x.id), x]));
+  const textOf = (id) => {
+    const x = byId.get(String(id));
+    return x ? (x.html ? cleanCanvasHtml(x.html) : escapeHtml(x.text ?? "")) : escapeHtml(String(id));
+  };
+  const t = q.question_type || "";
+  if (t === "multiple_answers_question" && Array.isArray(a)) {
+    return `<p><strong>Your answer:</strong></p><ul>${a.map((id) => `<li>▶ ${textOf(id)}</li>`).join("")}</ul>`;
+  }
+  if (t === "matching_question" && Array.isArray(a)) {
+    const matches = new Map((q.matches || []).map((m) => [String(m.match_id), m.text]));
+    return `<p><strong>Your answer:</strong></p><ul>${a.map((pair) =>
+      `<li>${textOf(pair.answer_id)} → ${escapeHtml(matches.get(String(pair.match_id)) ?? String(pair.match_id ?? "—"))}</li>`).join("")}</ul>`;
+  }
+  if ((t === "multiple_dropdowns_question" || t === "fill_in_multiple_blanks_question") && typeof a === "object") {
+    return `<p><strong>Your answer:</strong></p><ul>${Object.entries(a).map(([blank, v]) =>
+      `<li>${escapeHtml(blank)}: ${t === "multiple_dropdowns_question" ? textOf(v) : escapeHtml(String(v))}</li>`).join("")}</ul>`;
+  }
+  if (t === "essay_question") return `<p><strong>Your answer:</strong></p><div>${cleanCanvasHtml(String(a))}</div>`;
+  if (t === "multiple_choice_question" || t === "true_false_question") return `<p><strong>Your answer:</strong> ▶ ${textOf(a)}</p>`;
+  return `<p><strong>Your answer:</strong> ${escapeHtml(String(a))}</p>`;
+}
+
+/**
+ * Renders the student's own answered quiz questions from the API (fallback
+ * when the review page cannot be scraped). Shows every choice, the student's
+ * response and correctness when Canvas exposes it.
  */
 function renderOwnQuizAnswers(questions) {
   if (!Array.isArray(questions) || questions.length === 0) return "";
   let html = "<h3>Your answers</h3>";
   questions.forEach((q, i) => {
-    html += `<div class="quiz-question"><p><strong>Q${i + 1}.</strong> ${cleanCanvasHtml(q.question_text || "")}</p>`;
+    const status = q.correct === true ? " · <em>(correct)</em>" : q.correct === false ? " · <em>(incorrect)</em>" : q.correct === "partial" ? " · <em>(partial)</em>" : "";
+    const pts = q.points_possible != null ? ` (${fmtPoints(q.points)} / ${fmtPoints(q.points_possible)} pts)` : "";
+    html += `<div class="quiz-question"><p><strong>Q${i + 1}.</strong>${pts}${status} ${cleanCanvasHtml(q.question_text || "")}</p>`;
     const answers = sortByText((q.answers || []).filter((a) => a.id != null), (a) => a.text || a.html || "");
-    if (answers.length) {
+    if (answers.length && !["matching_question", "multiple_dropdowns_question"].includes(q.question_type)) {
       html += "<ul>";
       for (const ans of answers) {
         const text = ans.html ? cleanCanvasHtml(ans.html) : escapeHtml(ans.text || "");
-        // `correct` is only present when the instructor exposes correctness.
         const mark = ans.correct === true ? " <em>(correct)</em>" : ans.correct === false ? " <em>(incorrect)</em>" : "";
         html += `<li>${text}${mark}</li>`;
       }
       html += "</ul>";
     }
+    html += renderOwnResponse(q);
     html += "</div>";
   });
   return html;
 }
 
 // ---------------------------------------------------------------------------
-// Quiz Review Page Scraper (concluded-course fallback)
+// Quiz Review Page Scraper
 // ---------------------------------------------------------------------------
 
-// Canvas returns 403 on quiz submission API endpoints for concluded courses,
-// but the quiz review page is still accessible manually.
-async function fetchQuizReviewViaHtml(quiz) {
+/**
+ * Fetches one attempt's review page (`/quizzes/:id/history?version=N`) and
+ * returns { html, raw } where `html` is a structured rendering and `raw` the
+ * cleaned `#questions` markup (kept beside it so nothing the scraper misses is
+ * lost). Returns null when the page has no questions (not visible, or the
+ * attempt does not exist).
+ */
+async function fetchQuizAttemptHtml(quiz, version) {
   try {
-    const historyUrl = quiz.html_url.replace(/\?.*$/, "") + "/history";
-    const histRes = await fetchWithRetry(historyUrl);
-    if (!histRes.ok) return null;
-    
-    const histDoc = new DOMParser().parseFromString(await histRes.text(), "text/html");
-    const questionsEl = histDoc.querySelector("#questions");
+    const base = (quiz.html_url || "").replace(/\?.*$/, "");
+    if (!base) return null;
+    const url = version != null ? `${base}/history?version=${version}` : `${base}/history`;
+    const res = await fetchWithRetry(url);
+    if (!res.ok) return null;
+    const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+    const questionsEl = doc.querySelector("#questions");
     if (!questionsEl || questionsEl.querySelectorAll(".question").length === 0) return null;
-    let html = "";
-    for (const sel of [".quiz-submission-data", ".submission_details", ".quiz_score"]) {
-      const el = histDoc.querySelector(sel);
-      if (el) {
-        const text = el.textContent.replace(/\s+/g, " ").trim();
-        if (text) { html += `<p>${escapeHtml(text)}</p>`; break; }
-      }
-    }
-    questionsEl.querySelectorAll(".question").forEach((q, i) => {
-      const qTextEl = q.querySelector(".question_text");
-      const ptsEl = q.querySelector(".user_points, .points_awarded");
-      const pts = ptsEl ? ` · ${escapeHtml(ptsEl.textContent.trim())}` : "";
-      const qText = qTextEl ? cleanCanvasHtml(qTextEl.innerHTML) : "";
-      html += `<div class="quiz-question"><p><strong>Q${i + 1}${pts}.</strong> ${qText}</p>`;
-      const answerDivs = sortByText(q.querySelectorAll(".answer"), (ans) => ans.textContent.replace(/\s+/g, " ").trim());
-      if (answerDivs.length) {
-        const showsCorrectness = answerDivs.some((ans) => ans.classList.contains("correct_answer"));
-        html += "<ul>";
-        answerDivs.forEach((ans) => {
-          const isSelected = ans.classList.contains("selected_answer");
-          const isCorrect = ans.classList.contains("correct_answer");
-          const htmlEl = ans.querySelector(".answer_html");
-          const textEl = ans.querySelector(".answer_text");
-          const source = (htmlEl && htmlEl.innerHTML.trim()) ? htmlEl.innerHTML : textEl ? textEl.innerHTML : null;
-          const text = source
-            ? cleanCanvasHtml(source).replace(/<\/?p[^>]*>/gi, " ").trim()
-            : escapeHtml(ans.textContent.trim());
-          let prefix = "";
-          let style = "";
-          if (isSelected && isCorrect) { prefix = "✓ "; style = ' style="color:#16a34a;font-weight:600"'; }
-          else if (isSelected && showsCorrectness) { prefix = "✗ "; style = ' style="color:#dc2626;font-weight:600"'; }
-          else if (isSelected)         { prefix = "• "; style = ' style="font-weight:600"'; }
-          else if (isCorrect)          { prefix = "◇ "; style = ' style="color:#16a34a"'; }
-          html += `<li${style}>${prefix}${text}</li>`;
-        });
-        html += "</ul>";
-      } else {
-        const responseEl = q.querySelector(".quiz_response_text, .user_content");
-        if (responseEl) html += `<p><strong>Your answer:</strong> ${cleanCanvasHtml(responseEl.innerHTML)}</p>`;
-      }
-      html += "</div>";
-    });
-    return html;
+    return { html: renderQuizReview(doc, questionsEl), raw: cleanCanvasHtml(questionsEl.innerHTML) };
   } catch (err) {
-    console.warn(`[Canvas Vault] Quiz review scrape failed for "${quiz.title}":`, err);
+    console.warn(`[Canvas Vault] Quiz review scrape failed for "${quiz.title}" v${version}:`, err);
     return null;
   }
+}
+
+/** Text of an element with whitespace collapsed, or "". */
+function _text(el) {
+  return el ? el.textContent.replace(/\s+/g, " ").trim() : "";
+}
+
+/**
+ * Structured rendering of a Canvas quiz review page. Handles choice questions
+ * (selected / correct markers), matching and dropdown questions (selected
+ * <option>s), numeric and text inputs, essay responses and the instructor's
+ * per-question / per-answer feedback comments. Anything unrecognised falls
+ * back to the question's cleaned markup so it still reaches the export.
+ */
+function renderQuizReview(doc, questionsEl) {
+  let html = "";
+  for (const sel of [".quiz-submission-data", ".submission_details", ".quiz_score", "#quiz-submission-version-table"]) {
+    const el = doc.querySelector(sel);
+    const text = _text(el);
+    if (text) { html += `<p>${escapeHtml(text)}</p>`; break; }
+  }
+  questionsEl.querySelectorAll(".question").forEach((q, i) => {
+    const cls = q.className || "";
+    const status = /\bincorrect\b/.test(cls) ? "incorrect" : /\bpartial_credit\b/.test(cls) ? "partial" : /\bcorrect\b/.test(cls) ? "correct" : "";
+    const pts = _text(q.querySelector(".user_points, .points_awarded, .question_points"));
+    const header = [pts ? escapeHtml(pts) : "", status ? `<em>(${status})</em>` : ""].filter(Boolean).join(" · ");
+    const qTextEl = q.querySelector(".question_text");
+    html += `<div class="quiz-question" data-status="${status}"><p><strong>Q${i + 1}.</strong>${header ? ` ${header}` : ""}</p>`;
+    if (qTextEl) html += `<div>${cleanCanvasHtml(qTextEl.innerHTML)}</div>`;
+
+    // Choice-style answers.
+    const answerDivs = sortByText(q.querySelectorAll(".answer"), (ans) => _text(ans.querySelector(".answer_text, .answer_html") || ans));
+    const choice = answerDivs.filter((ans) => !ans.querySelector("select, input[type=text], textarea"));
+    if (choice.length) {
+      const showsCorrectness = choice.some((ans) => ans.classList.contains("correct_answer") || ans.classList.contains("wrong_answer"));
+      html += "<ul>";
+      for (const ans of choice) {
+        const isSelected = ans.classList.contains("selected_answer");
+        const isCorrect = ans.classList.contains("correct_answer");
+        const htmlEl = ans.querySelector(".answer_html");
+        const textEl = ans.querySelector(".answer_text, .answer_match_left, .answer_label");
+        const source = (htmlEl && htmlEl.innerHTML.trim()) ? htmlEl.innerHTML : textEl ? textEl.innerHTML : null;
+        const text = source ? cleanCanvasHtml(source).replace(/<\/?p[^>]*>/gi, " ").trim() : escapeHtml(_text(ans));
+        let prefix = "";
+        if (isSelected && isCorrect) prefix = "✓ ";
+        else if (isSelected && showsCorrectness) prefix = "✗ ";
+        else if (isSelected) prefix = "• ";
+        else if (isCorrect) prefix = "◇ ";
+        const comment = _text(ans.querySelector(".quiz_comment, .answer_comment, .comment"));
+        html += `<li>${prefix}${text}${comment ? ` <blockquote>${escapeHtml(comment)}</blockquote>` : ""}</li>`;
+      }
+      html += "</ul>";
+    }
+
+    // Matching / dropdown questions: one <select> per blank, chosen <option> selected.
+    const selects = q.querySelectorAll("select");
+    if (selects.length) {
+      html += "<p><strong>Your answer:</strong></p><ul>";
+      selects.forEach((s) => {
+        const label = _text(s.closest(".answer, tr, li, .form-row")?.querySelector(".answer_match_left, .answer_text, label, td:first-child")) || s.getAttribute("aria-label") || s.name || "";
+        const chosen = s.querySelector("option[selected], option:checked");
+        const value = chosen ? _text(chosen) : "(no selection)";
+        html += `<li>${escapeHtml(label)}${label ? " → " : ""}${escapeHtml(value)}</li>`;
+      });
+      html += "</ul>";
+    }
+
+    // Numeric / short text inputs.
+    const inputs = q.querySelectorAll("input[type=text], input[type=number], input.question_input, input.numerical_question_input");
+    if (inputs.length) {
+      const vals = Array.from(inputs).map((inp) => inp.value || inp.getAttribute("value") || "").filter(Boolean);
+      if (vals.length) html += `<p><strong>Your answer:</strong> ${vals.map(escapeHtml).join(", ")}</p>`;
+    }
+
+    // Essay / long text.
+    const responseEl = q.querySelector(".quiz_response_text, .user_content.quiz_response_text, textarea");
+    if (responseEl && !choice.length && !selects.length) {
+      const content = responseEl.tagName === "TEXTAREA" ? escapeHtml(responseEl.value || responseEl.textContent) : cleanCanvasHtml(responseEl.innerHTML);
+      if (content.trim()) html += `<p><strong>Your answer:</strong></p><div>${content}</div>`;
+    }
+
+    // Instructor feedback on the whole question.
+    const comments = Array.from(q.querySelectorAll(".quiz_comment, .question_comment, .correct_comments, .incorrect_comments, .neutral_comments"))
+      .filter((c) => !c.closest(".answer")).map(_text).filter(Boolean);
+    for (const c of comments) html += `<blockquote><strong>Feedback:</strong> ${escapeHtml(c)}</blockquote>`;
+
+    if (!choice.length && !selects.length && !inputs.length && !responseEl) {
+      html += `<div>${cleanCanvasHtml(q.innerHTML)}</div>`;
+    }
+    html += "</div>";
+  });
+  return html;
 }
 
 // ---------------------------------------------------------------------------
@@ -1464,33 +1560,75 @@ async function downloadCourse(courseId, courseName, domain, onProgress) {
           console.error(`[Canvas Vault] Quiz submissions error (${quiz.title}):`, err);
         }
       } else {
-        // Student: own score, plus own answered questions when allowed.
+        // Student: every attempt (score table from the assignment submission
+        // history), then each attempt's answers scraped from the review page,
+        // with the API answers as fallback for the latest attempt.
         try {
+          let attempts = [];
+          if (quiz.assignment_id) {
+            try {
+              const sres = await fetchWithRetry(api(`assignments/${quiz.assignment_id}/submissions/self?include[]=submission_history`), {
+                headers: { Accept: "application/json+canvas-string-ids" },
+              });
+              if (sres.ok) {
+                const sub = await sres.json();
+                const hist = Array.isArray(sub.submission_history) && sub.submission_history.length ? sub.submission_history : [sub];
+                attempts = hist.filter((h) => h.attempt != null && (h.submitted_at || h.score != null))
+                  .map((h) => ({ attempt: h.attempt, score: h.score, submitted_at: h.submitted_at }))
+                  .sort((x, y) => x.attempt - y.attempt);
+              }
+            } catch (err) {
+              console.warn(`[Canvas Vault] Quiz attempt history unavailable (${quiz.title}):`, err);
+            }
+          }
           const res = await fetchWithRetry(api(`quizzes/${quiz.id}/submissions?per_page=100`), {
             headers: { Accept: "application/json+canvas-string-ids" },
           });
-          if (res.ok) {
-            const data = await res.json();
-            const qs = (data.quiz_submissions || [])[0];
-            if (qs) {
-              const score = qs.kept_score ?? qs.score ?? "—";
-              body += `<h3>Your result</h3><p><strong>Score:</strong> ${score} / ${fmtPoints(quiz.points_possible)}${qs.attempt ? ` · attempt ${qs.attempt}` : ""}${qs.finished_at ? ` · finished ${formatDate(qs.finished_at)}` : ""}</p>`;
-              try {
-                const qres = await fetchWithRetry(`${domain}/api/v1/quiz_submissions/${qs.id}/questions`, {
-                  headers: { Accept: "application/json+canvas-string-ids" },
-                });
-                if (qres.ok) {
-                  const qdata = await qres.json();
-                  body += renderOwnQuizAnswers(qdata.quiz_submission_questions || []);
-                }
-              } catch (err) {
-                console.warn(`[Canvas Vault] Own quiz answers unavailable (${quiz.title}):`, err);
-              }
+          const qs = res.ok ? ((await res.json()).quiz_submissions || [])[0] : null;
+          if (qs) {
+            const score = qs.kept_score ?? qs.score ?? "—";
+            body += `<h3>Your result</h3><p><strong>Kept score:</strong> ${score} / ${fmtPoints(quiz.points_possible)}${qs.attempt ? ` · ${qs.attempt} attempt${qs.attempt === 1 ? "" : "s"}` : ""}${qs.finished_at ? ` · last finished ${formatDate(qs.finished_at)}` : ""}</p>`;
+            if (attempts.length === 0 && qs.attempt) {
+              attempts = [{ attempt: qs.attempt, score: qs.score ?? qs.kept_score, submitted_at: qs.finished_at }];
             }
           }
-          else if (res.status === 403) {
-            const scraped = await fetchQuizReviewViaHtml(quiz);
-            if (scraped) body += scraped;
+          if (attempts.length > 1) {
+            body += "<h3>Attempt history</h3><table><thead><tr><th>Attempt</th><th>Score</th><th>Submitted</th></tr></thead><tbody>";
+            for (const h of attempts) {
+              body += `<tr><td>${h.attempt}</td><td>${h.score ?? "—"} / ${fmtPoints(quiz.points_possible)}</td><td>${h.submitted_at ? formatDate(h.submitted_at) : ""}</td></tr>`;
+            }
+            body += "</tbody></table>";
+          }
+
+          // Per-attempt answers from the review page, newest first.
+          const versions = attempts.length ? attempts.map((h) => h.attempt).reverse() : (qs ? [null] : []);
+          let scrapedAny = false;
+          for (const v of versions) {
+            const review = await fetchQuizAttemptHtml(quiz, v);
+            if (!review) continue;
+            scrapedAny = true;
+            const label = v != null ? `Attempt ${v}` : "Your answers";
+            const h = attempts.find((x) => x.attempt === v);
+            body += `<h3>${label}${h && h.score != null ? ` — ${h.score} / ${fmtPoints(quiz.points_possible)}` : ""}</h3>${review.html}`;
+            filesToDownload.push({
+              url: `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><meta charset="utf-8"><title>${escapeHtml(quiz.title)} — raw attempt ${v ?? ""}</title>${review.raw}`)}`,
+              filename: `_raw-attempt-${v ?? "latest"}.html`,
+              path: quizPath,
+              conflictAction: "overwrite",
+            });
+          }
+          if (!scrapedAny && qs) {
+            try {
+              const qres = await fetchWithRetry(`${domain}/api/v1/quiz_submissions/${qs.id}/questions`, {
+                headers: { Accept: "application/json+canvas-string-ids" },
+              });
+              if (qres.ok) {
+                const qdata = await qres.json();
+                body += renderOwnQuizAnswers(qdata.quiz_submission_questions || []);
+              }
+            } catch (err) {
+              console.warn(`[Canvas Vault] Own quiz answers unavailable (${quiz.title}):`, err);
+            }
           }
         } catch (err) {
           console.error(`[Canvas Vault] Quiz result error (${quiz.title}):`, err);

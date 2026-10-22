@@ -52,3 +52,15 @@ class HtmlMdTests(unittest.TestCase):
     def test_whitespace_collapsed_and_empty_paragraphs_dropped(self):
         out = md("<div>\n  <p>  a   b </p>\n <p></p><p>c</p></div>")
         self.assertEqual(out, "a b\n\nc")
+
+
+class FormControlTests(unittest.TestCase):
+    def test_select_shows_chosen_option_and_inputs_show_values(self):
+        out = md('<p>Pick: <select><option>A</option><option selected>B</option></select></p>'
+                 '<p>N = <input type="text" value="2.2"></p>'
+                 '<p>Empty: <select><option>A</option></select></p>')
+        self.assertEqual(out, "Pick: **B**\n\nN = **2.2**\n\nEmpty: *(no selection)*")
+
+    def test_textarea_and_blockquote_feedback(self):
+        out = md('<textarea>my essay</textarea><blockquote><strong>Feedback:</strong> good</blockquote>')
+        self.assertEqual(out, "my essay\n\n> **Feedback:** good")

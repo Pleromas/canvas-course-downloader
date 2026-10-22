@@ -328,6 +328,76 @@ def render_book(store: Store, run_id: int, caps: Capabilities, md_dir: Path) -> 
     return out
 
 
+def _link_dest(annot):
+    """Destination of a GoTo link annotation as pypdf sees it (for tests/tools)."""
+    try:
+        if "/Dest" in annot:
+            return annot["/Dest"]
+        a = annot.get("/A")
+        if a is not None and a.get_object().get("/S") == "/GoTo":
+            return a.get_object().get("/D")
+    except Exception:
+        return None
+    return None
+
+
+def _bbox_lines(pdf_path: Path) -> list[list[tuple[float, float, float, float, str]]]:
+    """Per page, text lines as (xMin, yMin, xMax, yMax, text) with a top-left
+    origin in points, from `pdftotext -bbox-layout`. Empty when poppler is
+    missing. Used to place link rectangles over contents lines: Chromium's own
+    text matrices are not reliable to read back, poppler's boxes are."""
+    exe = pdftools.find_tool("pdftotext")
+    if not exe:
+        return []
+    r = pdftools._run([exe, "-bbox-layout", str(pdf_path), "-"])
+    if not r or r.returncode != 0:
+        return []
+    xml = r.stdout.decode("utf-8", "replace")
+    pages: list[list[tuple[float, float, float, float, str]]] = []
+    for page_xml in re.findall(r"<page\b.*?</page>", xml, re.S):
+        lines = []
+        for m in re.finditer(r'<line xMin="([\d.]+)" yMin="([\d.]+)" xMax="([\d.]+)" yMax="([\d.]+)">(.*?)</line>', page_xml, re.S):
+            words = re.findall(r">([^<]*)</word>", m.group(5))
+            text = htmlmod.unescape(" ".join(w.strip() for w in words if w.strip()))
+            lines.append((float(m.group(1)), float(m.group(2)), float(m.group(3)), float(m.group(4)), text))
+        pages.append(lines)
+    return pages
+
+
+def _add_toc_links(writer, toc_pages: list[int], toc_pdf: Path, entries: list[tuple[str, int, bool]]) -> int:
+    """Overlay a GoTo link on every contents line, matched by title text in
+    order. The link spans the printable width so the page number is clickable
+    too. Returns the number of links added (0 without poppler)."""
+    from pypdf.annotations import Link
+    boxes = _bbox_lines(toc_pdf)
+    if not boxes:
+        return 0
+    remaining = list(entries)
+    added = 0
+    for n, pi in enumerate(toc_pages):
+        if n >= len(boxes):
+            break
+        page = writer.pages[pi]
+        width, height = float(page.mediabox.width), float(page.mediabox.height)
+        # Group boxes into rows by yMin (title at the left, page number at the right).
+        rows: dict[int, list] = {}
+        for x0, y0, x1, y1, text in boxes[n]:
+            rows.setdefault(round(y0), []).append((x0, y0, x1, y1, text))
+        for _, row in sorted(rows.items()):
+            row.sort()
+            line_text = " ".join(t for *_, t in row).strip()
+            if not remaining or not line_text:
+                continue
+            title = " ".join(remaining[0][0].split())
+            if line_text.startswith(title) or (len(title) > 12 and line_text.startswith(title[:12])):
+                _, page_no, _ = remaining.pop(0)
+                y0 = min(b[1] for b in row); y1 = max(b[3] for b in row)
+                rect = (36.0, height - y1 - 2.0, width - 36.0, height - y0 + 2.0)
+                writer.add_annotation(page_number=pi, annotation=Link(rect=rect, target_page_index=page_no - 1))
+                added += 1
+    return added
+
+
 def _assemble(parts, md_dir: Path, printed: Path, out: Path, tmp: Path, snap) -> None:
     from pypdf import PdfReader, PdfWriter
     reader = PdfReader(str(printed))
@@ -387,8 +457,10 @@ def _assemble(parts, md_dir: Path, printed: Path, out: Path, tmp: Path, snap) ->
     writer = PdfWriter()
     for pi in range(cover_end):
         writer.add_page(reader.pages[pi])
+    toc_pages = []
     if toc_len:
         for pg in PdfReader(str(toc_pdf)).pages:
+            toc_pages.append(len(writer.pages))
             writer.add_page(pg)
     section_node = None
     for kind, it, s, e, extra, p in rows:
@@ -403,6 +475,8 @@ def _assemble(parts, md_dir: Path, printed: Path, out: Path, tmp: Path, snap) ->
             section_node = writer.add_outline_item(title, first)
         else:
             writer.add_outline_item(title, first, parent=section_node)
+    if toc_pages:
+        _add_toc_links(writer, toc_pages, toc_pdf, entries)
     writer.add_metadata({"/Title": f"{snap['course']['name']} — course export", "/Producer": "Canvas Vault"})
     with open(out, "wb") as fh:
         writer.write(fh)

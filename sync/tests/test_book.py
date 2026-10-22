@@ -72,3 +72,13 @@ class BookTests(TempStore):
         self.assertIn("A1", titles)
         self.assertIn("lec.pdf", titles)
         self.assertGreaterEqual(len(r.pages), 2 + 2 + 2)  # cover+toc, parts, spliced pages
+        # contents page carries one clickable link per entry
+        links = []
+        for pi, page in enumerate(r.pages[:3]):
+            for a in page.get("/Annots") or []:
+                a = a.get_object()
+                if a.get("/Subtype") == "/Link":
+                    links.append((pi, a))
+        self.assertGreaterEqual(len(links), 3, "Week 1, A1, lec.pdf should be linked")
+        targets = {r.get_destination_page_number(book._link_dest(a)) for _, a in links if book._link_dest(a) is not None}
+        self.assertIn(r.get_destination_page_number(next(o for o in r.outline if not isinstance(o, list))), targets)
