@@ -391,8 +391,13 @@ def _add_toc_links(writer, toc_pages: list[int], toc_pdf: Path, entries: list[tu
             line_text = " ".join(t for *_, t in row).strip()
             if not remaining or not line_text:
                 continue
-            title = " ".join(remaining[0][0].split())
-            if line_text.startswith(title) or (len(title) > 12 and line_text.startswith(title[:12])):
+            key = lambda t: re.sub(r"[^a-z0-9]+", "", t.lower())
+            title = key(remaining[0][0])
+            line_key = key(line_text)
+            # Compare on letters and digits only: dashes, quotes and spacing come
+            # back differently from the text layer; long titles may wrap, so a
+            # 16-character prefix is enough to identify the line.
+            if title and (line_key.startswith(title) or (len(title) > 16 and line_key.startswith(title[:16]))):
                 _, page_no, _ = remaining.pop(0)
                 y0 = min(b[1] for b in row); y1 = max(b[3] for b in row)
                 rect = (36.0, height - y1 - 2.0, width - 36.0, height - y0 + 2.0)
