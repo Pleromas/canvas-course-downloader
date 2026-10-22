@@ -80,5 +80,6 @@ class BookTests(TempStore):
                 if a.get("/Subtype") == "/Link":
                     links.append((pi, a))
         self.assertGreaterEqual(len(links), 3, "Week 1, A1, lec.pdf should be linked")
-        targets = {r.get_destination_page_number(book._link_dest(a)) for _, a in links if book._link_dest(a) is not None}
+        targets = {book._link_target_page(r, a) for _, a in links}
+        targets.discard(None)
         self.assertIn(r.get_destination_page_number(next(o for o in r.outline if not isinstance(o, list))), targets)

@@ -328,17 +328,20 @@ def render_book(store: Store, run_id: int, caps: Capabilities, md_dir: Path) -> 
     return out
 
 
-def _link_dest(annot):
-    """Destination of a GoTo link annotation as pypdf sees it (for tests/tools)."""
+def _link_target_page(reader, annot) -> int | None:
+    """0-based page index a GoTo link annotation points at (for tests/tools)."""
     try:
-        if "/Dest" in annot:
-            return annot["/Dest"]
-        a = annot.get("/A")
-        if a is not None and a.get_object().get("/S") == "/GoTo":
-            return a.get_object().get("/D")
+        dest = annot["/Dest"] if "/Dest" in annot else None
+        if dest is None:
+            a = annot.get("/A")
+            if a is not None and a.get_object().get("/S") == "/GoTo":
+                dest = a.get_object().get("/D")
+        if dest is None:
+            return None
+        page_ref = dest[0] if isinstance(dest, list) or hasattr(dest, "__getitem__") else dest
+        return reader._get_page_number_by_indirect(page_ref)
     except Exception:
         return None
-    return None
 
 
 def _bbox_lines(pdf_path: Path) -> list[list[tuple[float, float, float, float, str]]]:
