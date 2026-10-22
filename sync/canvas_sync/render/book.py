@@ -371,7 +371,7 @@ def _add_toc_links(writer, toc_pages: list[int], toc_pdf: Path, entries: list[tu
     """Overlay a GoTo link on every contents line, matched by title text in
     order. The link spans the printable width so the page number is clickable
     too. Returns the number of links added (0 without poppler)."""
-    from pypdf.annotations import Link
+    from pypdf.generic import ArrayObject, DictionaryObject, NameObject, NumberObject, RectangleObject
     boxes = _bbox_lines(toc_pdf)
     if not boxes:
         return 0
@@ -396,7 +396,18 @@ def _add_toc_links(writer, toc_pages: list[int], toc_pdf: Path, entries: list[tu
                 _, page_no, _ = remaining.pop(0)
                 y0 = min(b[1] for b in row); y1 = max(b[3] for b in row)
                 rect = (36.0, height - y1 - 2.0, width - 36.0, height - y0 + 2.0)
-                writer.add_annotation(page_number=pi, annotation=Link(rect=rect, target_page_index=page_no - 1))
+                target = writer.pages[min(max(page_no - 1, 0), len(writer.pages) - 1)]
+                # Explicit page reference in /Dest: pypdf's Link(target_page_index=)
+                # leaves a bare integer there, which pdf.js tolerates but other
+                # viewers and pypdf itself do not.
+                annot = DictionaryObject({
+                    NameObject("/Type"): NameObject("/Annot"),
+                    NameObject("/Subtype"): NameObject("/Link"),
+                    NameObject("/Rect"): RectangleObject(rect),
+                    NameObject("/Border"): ArrayObject([NumberObject(0), NumberObject(0), NumberObject(0)]),
+                    NameObject("/Dest"): ArrayObject([target.indirect_reference, NameObject("/Fit")]),
+                })
+                writer.add_annotation(page_number=pi, annotation=annot)
                 added += 1
     return added
 
