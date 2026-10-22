@@ -17,6 +17,16 @@ GROUP_ORDER = [
 EXCLUDED_SYNTHETIC = {"styles.css", "_inaccessible_links.csv"}
 
 
+def _hidden(item: dict) -> bool:
+    """Exported for the archive but not for reading: stylesheet, link report, and
+    the raw quiz review copies (`_raw-attempt-N.html`) kept for debugging."""
+    if item["type"] != "synthetic":
+        return False
+    key = str(item["key"]).lower()
+    base = key.rsplit("/", 1)[-1]
+    return key in EXCLUDED_SYNTHETIC or base.startswith("_raw-")
+
+
 @dataclass
 class Node:
     item: dict
@@ -38,8 +48,7 @@ def _index(items):
 def build_tree(snapshot: dict, attachments: dict[tuple[str, str], list[dict]] | None = None) -> list[Node]:
     """`attachments` maps (type, key) of a document to the file items it links;
     those files are nested under the document and leave the Files group."""
-    items = [i for i in snapshot.get("items", [])
-             if not (i["type"] == "synthetic" and str(i["key"]).lower() in EXCLUDED_SYNTHETIC)]
+    items = [i for i in snapshot.get("items", []) if not _hidden(i)]
     attachments = attachments or {}
     by_key, by_slug = _index(items)
     placed: set[tuple[str, str]] = set()

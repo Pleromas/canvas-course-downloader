@@ -212,6 +212,16 @@ async function fetchQuizAttemptHtml(quiz, version) {
     const doc = new DOMParser().parseFromString(await res.text(), "text/html");
     const questionsEl = doc.querySelector("#questions");
     if (!questionsEl || questionsEl.querySelectorAll(".question").length === 0) return null;
+    // Review pages use root-relative file URLs (/courses/../files/<id>/preview).
+    // Make them absolute so link rewriting and image extraction recognise them.
+    questionsEl.querySelectorAll("[src], [href]").forEach((el) => {
+      for (const attr of ["src", "href"]) {
+        const v = el.getAttribute(attr);
+        if (v && v.startsWith("/") && !v.startsWith("//")) {
+          try { el.setAttribute(attr, new URL(v, base).href); } catch { /* leave as is */ }
+        }
+      }
+    });
     return { html: renderQuizReview(doc, questionsEl), raw: cleanCanvasHtml(questionsEl.innerHTML) };
   } catch (err) {
     console.warn(`[Canvas Vault] Quiz review scrape failed for "${quiz.title}" v${version}:`, err);
@@ -224,88 +234,159 @@ function _text(el) {
   return el ? el.textContent.replace(/\s+/g, " ").trim() : "";
 }
 
+/** Cleaned inner HTML of an element, or "" (used for rich feedback comments). */
+function _rich(el) {
+  if (!el) return "";
+  const html = cleanCanvasHtml(el.innerHTML);
+  return html.replace(/<\/?p[^>]*>/gi, " ").trim() ? html : "";
+}
+
+/** Marker for one answer row from its review-page classes. */
+function _answerMark(ans, showsCorrectness) {
+  const selected = ans.classList.contains("selected_answer");
+  const correct = ans.classList.contains("correct_answer");
+  if (selected && correct) return "✓ ";
+  if (selected && (showsCorrectness || ans.classList.contains("wrong_answer"))) return "✗ ";
+  if (selected) return "• ";
+  if (correct) return "◇ ";
+  return "";
+}
+
 /**
- * Structured rendering of a Canvas quiz review page. Handles choice questions
- * (selected / correct markers), matching and dropdown questions (selected
- * <option>s), numeric and text inputs, essay responses and the instructor's
- * per-question / per-answer feedback comments. Anything unrecognised falls
- * back to the question's cleaned markup so it still reaches the export.
+ * Structured rendering of a Canvas quiz review page (`/quizzes/:id/history`).
+ *
+ * Canvas emits every answer-type sub-block for every answer and hides the
+ * irrelevant ones with CSS, so the render has to go by `question_type`:
+ *   - choice questions: `.answer` rows, `selected_answer` / `correct_answer` classes
+ *   - matching: `.answer_match_left` → chosen `<option selected>` in `.answer_match_right`
+ *   - multiple dropdowns: `<select>`s inline in the question text; the chosen
+ *     value is the `.selected_answer` in the matching `.answer_group`
+ *   - numerical / short answer / fill-in blanks: `input.question_input[value]`
+ *   - essay: `.quiz_response_text`
+ * Status comes from `correct` / `incorrect` / `partial_credit` on the question,
+ * points from `.user_points`, feedback from `.quiz_comment` and `.answer_comment`.
  */
 function renderQuizReview(doc, questionsEl) {
   let html = "";
-  for (const sel of [".quiz-submission-data", ".submission_details", ".quiz_score", "#quiz-submission-version-table"]) {
-    const el = doc.querySelector(sel);
-    const text = _text(el);
+  for (const sel of [".quiz-submission-data", ".submission_details", ".quiz_score"]) {
+    const text = _text(doc.querySelector(sel));
     if (text) { html += `<p>${escapeHtml(text)}</p>`; break; }
   }
-  questionsEl.querySelectorAll(".question").forEach((q, i) => {
+  const questions = questionsEl.querySelectorAll(".display_question, .question");
+  const seen = new Set();
+  let n = 0;
+  questions.forEach((q) => {
+    if (!q.classList.contains("display_question") && q.closest(".display_question")) return;
+    if (seen.has(q)) return;
+    seen.add(q);
+    n++;
     const cls = q.className || "";
     const status = /\bincorrect\b/.test(cls) ? "incorrect" : /\bpartial_credit\b/.test(cls) ? "partial" : /\bcorrect\b/.test(cls) ? "correct" : "";
-    const pts = _text(q.querySelector(".user_points, .points_awarded, .question_points"));
+    const type = _text(q.querySelector(".question_type")) || (cls.match(/\b(\w+_question)\b/) || [])[1] || "";
+    const pts = _text(q.querySelector(".user_points")).replace(/\s+/g, " ");
     const header = [pts ? escapeHtml(pts) : "", status ? `<em>(${status})</em>` : ""].filter(Boolean).join(" · ");
-    const qTextEl = q.querySelector(".question_text");
-    html += `<div class="quiz-question" data-status="${status}"><p><strong>Q${i + 1}.</strong>${header ? ` ${header}` : ""}</p>`;
-    if (qTextEl) html += `<div>${cleanCanvasHtml(qTextEl.innerHTML)}</div>`;
+    html += `<div class="quiz-question" data-status="${status}"><p><strong>Q${n}.</strong>${header ? ` ${header}` : ""}</p>`;
 
-    // Choice-style answers.
-    const answerDivs = sortByText(q.querySelectorAll(".answer"), (ans) => _text(ans.querySelector(".answer_text, .answer_html") || ans));
-    const choice = answerDivs.filter((ans) => !ans.querySelector("select, input[type=text], textarea"));
-    if (choice.length) {
-      const showsCorrectness = choice.some((ans) => ans.classList.contains("correct_answer") || ans.classList.contains("wrong_answer"));
-      html += "<ul>";
-      for (const ans of choice) {
-        const isSelected = ans.classList.contains("selected_answer");
-        const isCorrect = ans.classList.contains("correct_answer");
-        const htmlEl = ans.querySelector(".answer_html");
-        const textEl = ans.querySelector(".answer_text, .answer_match_left, .answer_label");
-        const source = (htmlEl && htmlEl.innerHTML.trim()) ? htmlEl.innerHTML : textEl ? textEl.innerHTML : null;
-        const text = source ? cleanCanvasHtml(source).replace(/<\/?p[^>]*>/gi, " ").trim() : escapeHtml(_text(ans));
-        let prefix = "";
-        if (isSelected && isCorrect) prefix = "✓ ";
-        else if (isSelected && showsCorrectness) prefix = "✗ ";
-        else if (isSelected) prefix = "• ";
-        else if (isCorrect) prefix = "◇ ";
-        const comment = _text(ans.querySelector(".quiz_comment, .answer_comment, .comment"));
-        html += `<li>${prefix}${text}${comment ? ` <blockquote>${escapeHtml(comment)}</blockquote>` : ""}</li>`;
+    // Question text. Dropdown and fill-in questions carry their controls inline;
+    // replace each control with the chosen value so the sentence reads naturally.
+    const qTextEl = q.querySelector(".question_text");
+    const answersEl = q.querySelector(".answers");
+    const groups = answersEl ? Array.from(answersEl.querySelectorAll(".answer_group")) : [];
+    if (qTextEl) {
+      const clone = qTextEl.cloneNode(true);
+      const selects = Array.from(clone.querySelectorAll("select"));
+      selects.forEach((sel, i) => {
+        let chosen = "";
+        const chosenOpt = sel.querySelector("option[selected]");
+        if (chosenOpt && chosenOpt.value !== "") chosen = _text(chosenOpt);
+        if (!chosen && groups[i]) chosen = _text(groups[i].querySelector(".answer.selected_answer .answer_text, .answer.selected_answer .answer_match_left"));
+        const strong = clone.ownerDocument.createElement("strong");
+        strong.textContent = chosen ? `[${chosen}]` : "[no selection]";
+        sel.replaceWith(strong);
+      });
+      clone.querySelectorAll("input").forEach((inp) => {
+        if ((inp.getAttribute("type") || "text") === "hidden") { inp.remove(); return; }
+        const strong = clone.ownerDocument.createElement("strong");
+        const v = inp.value || inp.getAttribute("value") || "";
+        strong.textContent = v ? `[${v}]` : "[blank]";
+        inp.replaceWith(strong);
+      });
+      // Canvas leaves the option list as loose text around dropdowns: ["a", "b"].
+      const walker = clone.ownerDocument.createTreeWalker(clone, 4 /* TEXT */);
+      const junk = [];
+      let node;
+      while ((node = walker.nextNode())) {
+        const t = node.textContent.trim();
+        if (t === '["' || t === '", "' || t === '"]' || t === "[" || t === "]") junk.push(node);
+      }
+      junk.forEach((x) => x.remove());
+      html += `<div>${cleanCanvasHtml(clone.innerHTML)}</div>`;
+    }
+
+    const answers = answersEl ? Array.from(answersEl.querySelectorAll(".answer")).filter((a) => a.parentElement && !a.parentElement.closest(".answer")) : [];
+    const showsCorrectness = answers.some((a) => a.classList.contains("correct_answer") || a.classList.contains("wrong_answer"));
+
+    if (type === "matching_question") {
+      html += "<p><strong>Your answer:</strong></p><ul>";
+      for (const a of answers) {
+        const left = _text(a.querySelector(".answer_match_left")) || _text(a.querySelector(".answer_text"));
+        const opt = a.querySelector(".answer_match_right option[selected], .answer_match_right option");
+        const right = opt ? _text(opt) : _text(a.querySelector(".answer_match_right"));
+        const mark = _answerMark(a, showsCorrectness);
+        const comment = _rich(a.querySelector(".answer_comment, .answer_comment_html"));
+        html += `<li>${mark}${escapeHtml(left)} → ${right ? escapeHtml(right) : "<em>(blank)</em>"}${comment ? ` <blockquote>${comment}</blockquote>` : ""}</li>`;
       }
       html += "</ul>";
-    }
-
-    // Matching / dropdown questions: one <select> per blank, chosen <option> selected.
-    const selects = q.querySelectorAll("select");
-    if (selects.length) {
-      html += "<p><strong>Your answer:</strong></p><ul>";
-      selects.forEach((s) => {
-        const label = _text(s.closest(".answer, tr, li, .form-row")?.querySelector(".answer_match_left, .answer_text, label, td:first-child")) || s.getAttribute("aria-label") || s.name || "";
-        const chosen = s.querySelector("option[selected], option:checked");
-        const value = chosen ? _text(chosen) : "(no selection)";
-        html += `<li>${escapeHtml(label)}${label ? " → " : ""}${escapeHtml(value)}</li>`;
-      });
+    } else if (type === "multiple_dropdowns_question" || type === "fill_in_multiple_blanks_question") {
+      if (groups.length) {
+        html += "<p><strong>Your answer:</strong></p><ul>";
+        groups.forEach((g, i) => {
+          const heading = _text(g.querySelector(".answer-group-heading")) || `Blank ${i + 1}`;
+          const chosen = g.querySelector(".answer.selected_answer");
+          const text = chosen ? _text(chosen.querySelector(".answer_text")) : "";
+          const mark = chosen ? _answerMark(chosen, g.querySelector(".correct_answer") != null) : "";
+          const correct = !chosen || !chosen.classList.contains("correct_answer") ? _text(g.querySelector(".answer.correct_answer .answer_text")) : "";
+          html += `<li>${escapeHtml(heading)} ${mark}${text ? escapeHtml(text) : "<em>(blank)</em>"}${correct ? ` <em>(correct: ${escapeHtml(correct)})</em>` : ""}</li>`;
+        });
+        html += "</ul>";
+      } else if (type === "fill_in_multiple_blanks_question") {
+        const vals = Array.from(q.querySelectorAll(".question_text input")).map((i) => i.value || i.getAttribute("value") || "");
+        if (vals.some(Boolean)) html += `<p><strong>Your answer:</strong> ${vals.map((v) => escapeHtml(v || "(blank)")).join(", ")}</p>`;
+      }
+    } else if (type === "numerical_question" || type === "calculated_question" || type === "short_answer_question") {
+      const inp = q.querySelector(".answers input.question_input, .answers input[type=text]");
+      const v = inp ? (inp.value || inp.getAttribute("value") || "") : "";
+      const correct = _text(q.querySelector(".answers .answer.correct_answer .answer_text, .answers .answer.correct_answer .numerical_answer, .correct_answer .answer_match_left"));
+      html += `<p><strong>Your answer:</strong> ${v ? escapeHtml(v) : "<em>(blank)</em>"}${status === "incorrect" && correct ? ` · <em>correct: ${escapeHtml(correct)}</em>` : ""}</p>`;
+    } else if (type === "essay_question" || type === "file_upload_question") {
+      const resp = q.querySelector(".quiz_response_text, .user_content.quiz_response_text, textarea");
+      const content = resp ? (resp.tagName === "TEXTAREA" ? escapeHtml(resp.value || resp.textContent) : cleanCanvasHtml(resp.innerHTML)) : "";
+      html += `<p><strong>Your answer:</strong></p><div>${content.trim() || "<em>(blank)</em>"}</div>`;
+      q.querySelectorAll(".answers a[href]").forEach((link) => { html += `<p><a href="${escapeHtml(link.href)}">${escapeHtml(_text(link))}</a></p>`; });
+    } else if (answers.length) {
+      // multiple_choice, true_false, multiple_answers, text_only, anything else with rows
+      const rows = sortByText(answers, (a) => _text(a.querySelector(".answer_text, .answer_html")) || _text(a));
+      html += "<ul>";
+      for (const a of rows) {
+        const htmlEl = a.querySelector(".answer_html");
+        const textEl = a.querySelector(".answer_text");
+        const source = (htmlEl && htmlEl.innerHTML.trim()) ? htmlEl.innerHTML : textEl ? textEl.innerHTML : null;
+        const text = source ? cleanCanvasHtml(source).replace(/<\/?p[^>]*>/gi, " ").trim() : escapeHtml(_text(a));
+        const comment = _rich(a.querySelector(".answer_comment, .answer_comment_html"));
+        html += `<li>${_answerMark(a, showsCorrectness)}${text}${comment ? ` <blockquote>${comment}</blockquote>` : ""}</li>`;
+      }
       html += "</ul>";
+    } else {
+      const resp = q.querySelector(".quiz_response_text");
+      if (resp) html += `<p><strong>Your answer:</strong></p><div>${cleanCanvasHtml(resp.innerHTML)}</div>`;
     }
 
-    // Numeric / short text inputs.
-    const inputs = q.querySelectorAll("input[type=text], input[type=number], input.question_input, input.numerical_question_input");
-    if (inputs.length) {
-      const vals = Array.from(inputs).map((inp) => inp.value || inp.getAttribute("value") || "").filter(Boolean);
-      if (vals.length) html += `<p><strong>Your answer:</strong> ${vals.map(escapeHtml).join(", ")}</p>`;
-    }
-
-    // Essay / long text.
-    const responseEl = q.querySelector(".quiz_response_text, .user_content.quiz_response_text, textarea");
-    if (responseEl && !choice.length && !selects.length) {
-      const content = responseEl.tagName === "TEXTAREA" ? escapeHtml(responseEl.value || responseEl.textContent) : cleanCanvasHtml(responseEl.innerHTML);
-      if (content.trim()) html += `<p><strong>Your answer:</strong></p><div>${content}</div>`;
-    }
-
-    // Instructor feedback on the whole question.
-    const comments = Array.from(q.querySelectorAll(".quiz_comment, .question_comment, .correct_comments, .incorrect_comments, .neutral_comments"))
-      .filter((c) => !c.closest(".answer")).map(_text).filter(Boolean);
-    for (const c of comments) html += `<blockquote><strong>Feedback:</strong> ${escapeHtml(c)}</blockquote>`;
-
-    if (!choice.length && !selects.length && !inputs.length && !responseEl) {
-      html += `<div>${cleanCanvasHtml(q.innerHTML)}</div>`;
-    }
+    // Instructor feedback on the whole question (per-answer comments handled above).
+    q.querySelectorAll(".quiz_comment:not(.empty), .question_comment, .correct_comments, .incorrect_comments, .neutral_comments").forEach((c) => {
+      if (c.closest(".answer")) return;
+      const rich = _rich(c);
+      if (rich) html += `<blockquote><strong>Feedback:</strong> ${rich}</blockquote>`;
+    });
     html += "</div>";
   });
   return html;

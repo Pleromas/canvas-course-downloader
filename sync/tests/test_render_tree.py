@@ -78,3 +78,8 @@ class AttachmentTests(unittest.TestCase):
         from canvas_sync.render.tree import build_tree, flatten
         snap = {"items": SNAP["items"] + [item("synthetic", "syllabus.html", "Syllabus.html", "Syllabus")]}
         self.assertEqual(flatten(build_tree(snap))[0]["key"], "syllabus.html")
+
+    def test_raw_attempt_copies_hidden(self):
+        from canvas_sync.render.tree import build_tree, flatten
+        snap = {"items": SNAP["items"] + [item("synthetic", "quizzes/q0/_raw-attempt-3.html", "Quizzes/Q0/_raw-attempt-3.html", "_raw-attempt-3.html")]}
+        self.assertNotIn("quizzes/q0/_raw-attempt-3.html", [i["key"] for i in flatten(build_tree(snap))])
